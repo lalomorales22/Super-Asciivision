@@ -66,13 +66,20 @@ The script checks for prerequisites (Xcode CLI Tools, Homebrew, Node.js 20+, Rus
 **Requirements:** macOS, Node.js 20+, Rust stable, Xcode CLI Tools, FFmpeg, LLVM/libclang, pkg-config
 
 ```bash
+# Install system dependencies
 brew install ffmpeg llvm pkg-config yt-dlp
 
+# Install npm dependencies
 npm install
-./build-asciivision.sh        # Build ASCIIVision + copy to sidecar
 
-npm run tauri dev              # Development
-npm run tauri build            # Production (.app + .dmg)
+# Build ASCIIVision sidecar binary (auto-detects LLVM and FFmpeg paths)
+./build-asciivision.sh
+
+# Development
+npm run tauri dev
+
+# Production build (.app + .dmg)
+npm run tauri build
 ```
 
 Install the locally built app:
@@ -159,11 +166,11 @@ No data is sent anywhere except to the AI provider APIs you configure. This repo
 ## Validation
 
 ```bash
-npx tsc --noEmit                       # TypeScript
-cd src-tauri && cargo check            # Rust (Tauri)
-cd ../asciivision-core && cargo check  # Rust (ASCIIVision)
-npm test                                # Frontend tests
-cd src-tauri && cargo test             # Backend tests
+npx tsc --noEmit                                   # TypeScript
+cargo check --manifest-path src-tauri/Cargo.toml    # Rust (Tauri)
+cargo check --manifest-path asciivision-core/Cargo.toml  # Rust (ASCIIVision)
+npm test                                            # Frontend tests
+cargo test --manifest-path src-tauri/Cargo.toml     # Backend tests
 ```
 
 ---
