@@ -1,0 +1,256 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap");
+@import "tailwindcss";
+@import "xterm/css/xterm.css";
+
+:root {
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #f4efe7;
+  background: #050505;
+  color-scheme: dark;
+  scrollbar-color: rgba(132, 160, 155, 0.48) #050607;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  height: 100%;
+  border-radius: 34px;
+  overflow: hidden;
+}
+
+html,
+body {
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+body {
+  background: transparent;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* Native window drag region for custom titlebar on macOS */
+.app-titlebar {
+  -webkit-app-region: drag;
+}
+
+.app-titlebar button,
+.app-titlebar input,
+.app-titlebar select,
+.app-titlebar textarea,
+.app-titlebar a,
+.app-titlebar nav,
+.app-titlebar [data-no-drag="true"] {
+  -webkit-app-region: no-drag;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+@keyframes page-swap {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.994);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.prose pre {
+  padding: 1rem;
+  overflow-x: auto;
+}
+
+.prose code::before,
+.prose code::after {
+  content: "";
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: #050607;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(132, 160, 155, 0.55), rgba(125, 211, 252, 0.4));
+  border: 2px solid #050607;
+}
+
+/* highlight.js ANSI terminal theme (matches app xterm palette) */
+.hljs {
+  color: #c9d1d9;
+  background: transparent;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-link {
+  color: #00d4aa;
+}
+.hljs-function .hljs-keyword {
+  color: #00d4aa;
+}
+.hljs-string,
+.hljs-attr,
+.hljs-addition {
+  color: #4ade80;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.class_ {
+  color: #c084fc;
+}
+.hljs-variable,
+.hljs-template-variable,
+.hljs-type,
+.hljs-built_in {
+  color: #22d3ee;
+}
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion,
+.hljs-meta {
+  color: #6b7280;
+}
+.hljs-number {
+  color: #fbbf24;
+}
+.hljs-regexp {
+  color: #fb923c;
+}
+.hljs-symbol,
+.hljs-bullet {
+  color: #f472b6;
+}
+.hljs-params {
+  color: #c9d1d9;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: bold;
+}
+
+/* ─── ASCIIVision galaxy/rainbow button ─── */
+@keyframes asciivision-gradient {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes asciivision-shimmer {
+  0%   { opacity: 0.6; }
+  50%  { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
+@keyframes asciivision-glow-pulse {
+  0%   { box-shadow: 0 0 6px rgba(168,85,247,0.3), 0 0 12px rgba(59,130,246,0.15), inset 0 0 8px rgba(168,85,247,0.1); }
+  33%  { box-shadow: 0 0 8px rgba(236,72,153,0.35), 0 0 16px rgba(168,85,247,0.2), inset 0 0 10px rgba(236,72,153,0.1); }
+  66%  { box-shadow: 0 0 8px rgba(59,130,246,0.35), 0 0 16px rgba(34,211,238,0.2), inset 0 0 10px rgba(59,130,246,0.1); }
+  100% { box-shadow: 0 0 6px rgba(168,85,247,0.3), 0 0 12px rgba(59,130,246,0.15), inset 0 0 8px rgba(168,85,247,0.1); }
+}
+
+.asciivision-btn {
+  position: relative;
+  border: 1px solid rgba(168,85,247,0.25);
+  animation: asciivision-glow-pulse 4s ease-in-out infinite;
+}
+
+.asciivision-btn:hover {
+  border-color: rgba(168,85,247,0.45);
+  animation: asciivision-glow-pulse 2s ease-in-out infinite;
+}
+
+.asciivision-btn-bg {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    135deg,
+    rgba(168,85,247,0.18),
+    rgba(59,130,246,0.15),
+    rgba(236,72,153,0.14),
+    rgba(34,211,238,0.12),
+    rgba(168,85,247,0.18)
+  );
+  background-size: 300% 300%;
+  animation: asciivision-gradient 6s ease infinite;
+  z-index: 0;
+}
+
+.asciivision-btn:hover .asciivision-btn-bg {
+  background: linear-gradient(
+    135deg,
+    rgba(168,85,247,0.3),
+    rgba(59,130,246,0.25),
+    rgba(236,72,153,0.22),
+    rgba(34,211,238,0.2),
+    rgba(168,85,247,0.3)
+  );
+  background-size: 300% 300%;
+  animation: asciivision-gradient 3s ease infinite;
+}
+
+.asciivision-btn-text {
+  background: linear-gradient(
+    90deg,
+    #c084fc,
+    #60a5fa,
+    #22d3ee,
+    #4ade80,
+    #facc15,
+    #fb923c,
+    #f472b6,
+    #c084fc
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: asciivision-gradient 4s linear infinite;
+}
+
+.asciivision-btn:hover .asciivision-btn-text {
+  animation: asciivision-gradient 2s linear infinite;
+  filter: brightness(1.2);
+}
+
+/* ASCIIVision overlay title */
+.asciivision-title-text {
+  background: linear-gradient(90deg, #22d3ee, #a78bfa, #f472b6, #22d3ee);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: asciivision-gradient 5s linear infinite;
+}
+
+/* Make xterm fill the container properly in the overlay */
+.fixed .xterm {
+  height: 100% !important;
+}
+.fixed .xterm-viewport {
+  overflow-y: hidden !important;
+}
+.fixed .xterm-screen {
+  height: 100% !important;
+}

@@ -1,0 +1,60 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!asciivision-core/.env.example
+*.key
+
+# Local databases and app state
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+
+# Build output — frontend
+node_modules
+dist
+dist-ssr
+coverage
+
+# Build output — Tauri / Rust
+src-tauri/target
+src-tauri/gen/schemas
+*.dmg
+*.app
+*.pkg
+
+# Build output — ASCIIVision Rust
+asciivision-core/target
+
+# Sidecar binaries (built by build-asciivision.sh)
+src-tauri/binaries/asciivision-*
+
+# Editor directories and files
+.vscode
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Vite
+*.local
+
+# Tauri dev
+WixToolset*

@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: hands-relay
+    runtime: node
+    rootDir: hands-relay
+    plan: free
+    autoDeployTrigger: commit
+    buildCommand: npm install
+    startCommand: npm run start
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - hands-relay/**
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: HANDS_PUBLIC_BASE_URL
+        sync: false

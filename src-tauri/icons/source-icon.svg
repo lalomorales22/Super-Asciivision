@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="outerGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="30" result="blur"/>
+      <feFlood flood-color="#00e5ff" flood-opacity="0.6" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0a0f"/>
+      <stop offset="100%" stop-color="#050508"/>
+    </linearGradient>
+    <linearGradient id="aGlow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#00ffff"/>
+      <stop offset="50%" stop-color="#00e5ff"/>
+      <stop offset="100%" stop-color="#0088ff"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="224" fill="url(#bgGrad)"/>
+  <!-- Subtle border -->
+  <rect x="4" y="4" width="1016" height="1016" rx="220" fill="none" stroke="rgba(0,229,255,0.15)" stroke-width="4"/>
+  <!-- "s" in white -->
+  <text x="310" y="680" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="520" font-weight="300" fill="#ffffff" opacity="0.95">s</text>
+  <!-- "A" with neon glow -->
+  <text x="530" y="680" font-family="'SF Pro Display', 'Helvetica Neue', Arial, sans-serif" font-size="520" font-weight="700" fill="url(#aGlow)" filter="url(#outerGlow)">A</text>
+</svg>
