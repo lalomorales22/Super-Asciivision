@@ -6364,15 +6364,7 @@ function AsciiVisionPanel({ onClose }: { onClose: () => void }) {
       }
     });
 
-    // Fit and resize helper
-    const doFitAndResize = () => {
-      fitAddon.fit();
-      if (sessionIdRef.current && terminal.cols > 0 && terminal.rows > 0) {
-        void api.resizeTerminal(sessionIdRef.current, terminal.cols, terminal.rows);
-      }
-    };
-
-    // Initial fit
+    // Initial fit (no PTY resize yet — session hasn't started)
     fitAddon.fit();
 
     // Launch asciivision
@@ -6430,22 +6422,20 @@ function AsciiVisionPanel({ onClose }: { onClose: () => void }) {
 
         setLoading(false);
 
-        // Fit again now that loading overlay is gone, then send resize
+        // Fit once after the loading overlay is removed and layout settles.
+        // A single delayed fit avoids the resize feedback loop that can cause
+        // layout oscillation on some macOS configurations.
         requestAnimationFrame(() => {
           if (disposed) return;
-          fitAddon.fit();
-          if (terminal.cols > 0 && terminal.rows > 0) {
-            void api.resizeTerminal(handle.sessionId, terminal.cols, terminal.rows);
-          }
           terminal.focus();
-          // One more fit after a short delay to ensure layout is fully settled
           setTimeout(() => {
             if (disposed) return;
             fitAddon.fit();
-            if (terminal.cols > 0 && terminal.rows > 0) {
-              void api.resizeTerminal(handle.sessionId, terminal.cols, terminal.rows);
+            const { cols, rows } = terminal;
+            if (cols > 0 && rows > 0) {
+              void api.resizeTerminal(handle.sessionId, cols, rows);
             }
-          }, 200);
+          }, 120);
         });
       } catch (err) {
         if (!disposed) {
@@ -6457,11 +6447,26 @@ function AsciiVisionPanel({ onClose }: { onClose: () => void }) {
 
     void launch();
 
-    // Resize handling — debounced
+    // Resize handling — debounced and guarded against feedback loops.
+    // Track last-sent dimensions to avoid redundant PTY resizes that can
+    // cause layout oscillation on some macOS configurations (transparent +
+    // undecorated windows).
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastSentCols = 0;
+    let lastSentRows = 0;
+    const stableResize = () => {
+      if (disposed) return;
+      fitAddon.fit();
+      const { cols, rows } = terminal;
+      if (cols > 0 && rows > 0 && (cols !== lastSentCols || rows !== lastSentRows) && sessionIdRef.current) {
+        lastSentCols = cols;
+        lastSentRows = rows;
+        void api.resizeTerminal(sessionIdRef.current, cols, rows);
+      }
+    };
     const resize = () => {
       if (resizeTimer) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => doFitAndResize(), 50);
+      resizeTimer = setTimeout(stableResize, 80);
     };
     const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => resize()) : null;
     observer?.observe(host);

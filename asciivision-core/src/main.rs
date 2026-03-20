@@ -3905,17 +3905,11 @@ async fn main() -> Result<()> {
         }
     }
 
-    // request a large terminal window before entering raw mode
-    // \x1b[8;rows;colst resizes the terminal on macOS Terminal.app, iTerm2, etc.
-    // When running inside an xterm.js PTY (embedded in Tauri), the host controls
-    // sizing via IPC, so no sleep is needed.  Outside xterm.js (standalone) the
-    // terminal emulator applies the resize almost instantly.
-    {
-        use std::io::Write;
-        let mut out = std::io::stdout();
-        let _ = out.write_all(b"\x1b[8;58;200t");
-        let _ = out.flush();
-    }
+    // NOTE: A previous version sent \x1b[8;58;200t here to request a large
+    // terminal window.  This is harmful when running inside an xterm.js PTY
+    // embedded in Tauri — it can trigger layout oscillation on some Macs
+    // (transparent + undecorated window).  The host controls sizing via IPC,
+    // so this escape sequence is unnecessary and has been removed.
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
