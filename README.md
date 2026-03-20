@@ -11,7 +11,7 @@ Click the rainbow **ASCIIVISION** button in the nav bar to drop into the termina
 | Page | What it does |
 |------|-------------|
 | **Chat** | Streamed conversations with xAI models, workspace-backed context, agentic tool use (file read/write, shell commands, search) |
-| **Imagine** | Image and video generation via xAI, category-organized gallery |
+| **Image & Video** | Image and video generation via xAI, category-organized gallery |
 | **Voice & Audio** | Text-to-speech generation and live realtime voice chat |
 | **Media Editor** | Timeline-based export workflow via ffmpeg |
 | **IDE** | File explorer, code editor with syntax highlighting, AI copilot, browser preview |
@@ -42,8 +42,8 @@ Click the rainbow **ASCIIVISION** button in the nav bar to drop into the termina
 ### One-Line Install
 
 ```bash
-git clone https://github.com/lalomorales22/grok-desktop-asciivision.git
-cd grok-desktop-asciivision
+git clone https://github.com/lalomorales22/Super-Asciivision.git
+cd Super-Asciivision
 ./install.sh
 ```
 
@@ -51,7 +51,7 @@ The script checks for prerequisites (Xcode CLI Tools, Homebrew, Node.js 20+, Rus
 
 ### From a Release DMG
 
-1. Download the latest `.dmg` from [Releases](https://github.com/lalomorales22/grok-desktop-asciivision/releases).
+1. Download the latest `.dmg` from [Releases](https://github.com/lalomorales22/Super-Asciivision/releases).
 2. Drag `Super ASCIIVision.app` into `Applications`.
 3. First launch requires clearing the quarantine flag (app is not code-signed yet):
    ```bash

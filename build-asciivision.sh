@@ -7,6 +7,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET_TRIPLE="$(rustc -vV | grep host | cut -d' ' -f2)"
 
+# ── Ensure LLVM/libclang paths are set for ffmpeg-sys-next bindgen ──
+# Homebrew LLVM is required for compiling ffmpeg-sys-next on macOS.
+if [[ -z "${LIBCLANG_PATH:-}" ]]; then
+  if [[ -d "/opt/homebrew/opt/llvm/lib" ]]; then
+    export LIBCLANG_PATH="/opt/homebrew/opt/llvm/lib"
+  elif [[ -d "/usr/local/opt/llvm/lib" ]]; then
+    export LIBCLANG_PATH="/usr/local/opt/llvm/lib"
+  fi
+fi
+
+# Ensure pkg-config can find FFmpeg and other Homebrew libs
+if [[ -d "/opt/homebrew/lib/pkgconfig" ]]; then
+  export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}:/opt/homebrew/lib/pkgconfig"
+elif [[ -d "/usr/local/lib/pkgconfig" ]]; then
+  export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}:/usr/local/lib/pkgconfig"
+fi
+
 echo "Building ASCIIVision for $TARGET_TRIPLE..."
 cd "$SCRIPT_DIR/asciivision-core"
 cargo build --release

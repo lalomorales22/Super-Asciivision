@@ -749,7 +749,11 @@ impl App {
             }
         }
 
-        self.sysmon.refresh();
+        // Defer sysmon init until after the intro — System::new_with_specifics()
+        // is very expensive on first call (250-700ms on macOS).
+        if !matches!(self.mode, AppMode::Intro) {
+            self.sysmon.refresh();
+        }
 
         // poll webcam -- drain all buffered frames to keep latency low
         if let Some(ref cam) = self.webcam {
@@ -3903,12 +3907,14 @@ async fn main() -> Result<()> {
 
     // request a large terminal window before entering raw mode
     // \x1b[8;rows;colst resizes the terminal on macOS Terminal.app, iTerm2, etc.
+    // When running inside an xterm.js PTY (embedded in Tauri), the host controls
+    // sizing via IPC, so no sleep is needed.  Outside xterm.js (standalone) the
+    // terminal emulator applies the resize almost instantly.
     {
         use std::io::Write;
         let mut out = std::io::stdout();
         let _ = out.write_all(b"\x1b[8;58;200t");
         let _ = out.flush();
-        std::thread::sleep(Duration::from_millis(150));
     }
 
     enable_raw_mode()?;
