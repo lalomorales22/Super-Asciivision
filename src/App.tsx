@@ -6374,13 +6374,15 @@ function TileTerminal({ sessionId }: { sessionId: string }) {
       }
       unlistenFn = unlisten;
 
-      // Replay any early output (e.g. shell prompt) that was emitted before
-      // the listener was ready — fixes the missing-prompt timing gap.
+      // Drain any early output that was buffered before the listener was ready.
+      // Don't replay it — the early buffer may contain duplicate prompts from
+      // the pre-resize and post-resize PTY size. Instead, send Ctrl+L to clear
+      // the screen and redraw a single clean prompt at the correct viewport size.
       try {
         const earlyOutput = await api.getTerminalBuffer(sessionId);
         if (!disposed && xtermRef.current) {
           if (earlyOutput) {
-            xtermRef.current.write(earlyOutput);
+            void api.writeTerminalInput(sessionId, "\x0c");
           } else {
             // Session already existed (re-mount after navigation) — the early
             // buffer was already drained, so nudge the shell to redraw its prompt.
@@ -6752,6 +6754,20 @@ function TerminalPanel() {
     if (terminal.cols > 0 && terminal.rows > 0) {
       void resizeTerminal(terminal.cols, terminal.rows);
     }
+    // Drain early output buffer — the store event listener may not have been
+    // ready when the shell printed its first prompt. Send Ctrl+L to clear
+    // and redraw a single clean prompt at the correct viewport size.
+    const sid = terminalSessionId;
+    void (async () => {
+      try {
+        await api.getTerminalBuffer(sid);
+        if (xtermRef.current) {
+          void api.writeTerminalInput(sid, "\x0c");
+        }
+      } catch {
+        // Session may not exist — ignore
+      }
+    })();
   }, [resizeTerminal, terminalSessionId]);
 
   return (
