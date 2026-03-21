@@ -6515,8 +6515,13 @@ function AsciiVisionPanel({ onClose }: { onClose: () => void }) {
 
         if (disposed) return;
 
-        // Now launch the process
-        const handle = await api.launchAsciivision();
+        // Fit xterm.js to its container so we know the correct viewport size
+        // BEFORE creating the PTY — prevents scroll caused by PTY being larger
+        // than the xterm.js viewport on macOS.
+        fitAddon.fit();
+
+        // Now launch the process with the correct initial PTY size
+        const handle = await api.launchAsciivision(terminal.cols, terminal.rows);
         if (disposed) {
           void api.killTerminal(handle.sessionId);
           return;

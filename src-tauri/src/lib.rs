@@ -998,6 +998,8 @@ async fn create_terminal(
 async fn launch_asciivision(
     app: AppHandle,
     state: State<'_, AppState>,
+    cols: Option<u16>,
+    rows: Option<u16>,
 ) -> Result<TerminalHandle, String> {
     // Look for the asciivision binary in several locations:
     // 1. Tauri sidecar location (next to the app binary, with target triple suffix)
@@ -1077,6 +1079,8 @@ async fn launch_asciivision(
         app,
         &state.terminals,
         binary_path.to_string_lossy().to_string(),
+        cols.unwrap_or(120),
+        rows.unwrap_or(40),
     )
     .await
     .map_err(to_command_error)

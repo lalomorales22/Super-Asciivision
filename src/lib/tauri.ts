@@ -123,7 +123,8 @@ export const api = {
     invoke<StreamHandle>("send_agent_message", { input }),
   startTerminal: () => invoke<TerminalHandle>("start_terminal"),
   createTerminal: () => invoke<TerminalHandle>("create_terminal"),
-  launchAsciivision: () => invoke<TerminalHandle>("launch_asciivision"),
+  launchAsciivision: (cols?: number, rows?: number) =>
+    invoke<TerminalHandle>("launch_asciivision", { cols: cols ?? null, rows: rows ?? null }),
   writeTerminalInput: (sessionId: string, input: string) =>
     invoke<void>("write_terminal_input", { sessionId, input }),
   killTerminal: (sessionId: string) =>

@@ -345,12 +345,14 @@ pub async fn create_asciivision_session(
     app: AppHandle,
     registry: &TerminalRegistry,
     binary_path: String,
+    cols: u16,
+    rows: u16,
 ) -> AppResult<TerminalHandle> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
-            rows: 50,
-            cols: 160,
+            rows: rows.max(1),
+            cols: cols.max(1),
             pixel_width: 0,
             pixel_height: 0,
         })
