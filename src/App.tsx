@@ -174,6 +174,7 @@ const CHAT_MODELS = [
 ];
 
 const IMAGE_MODELS = ["grok-imagine-image-pro", "grok-imagine-image"];
+const OLLAMA_IMAGE_MODELS = ["x/flux2-klein:4b", "x/flux2-klein:9b"];
 const VIDEO_MODELS = ["grok-imagine-video"];
 const IMAGE_ASPECT_OPTIONS = ["1:1", "16:9", "9:16", "4:3", "3:4"];
 const IMAGE_RESOLUTION_OPTIONS = ["1k", "2k"];
@@ -1536,6 +1537,8 @@ function ChatPage() {
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const workspaceItemsMap = useAppStore((state) => state.workspaceItems);
   const workspaceSelection = useAppStore((state) => state.workspaceSelection);
+  const selectedProvider = useAppStore((state) => state.selectedProvider);
+  const setSelectedProvider = useAppStore((state) => state.setSelectedProvider);
   const selectModel = useAppStore((state) => state.selectModel);
   const setComposer = useAppStore((state) => state.setComposer);
   const sendMessage = useAppStore((state) => state.sendMessage);
@@ -1555,6 +1558,9 @@ function ChatPage() {
     [workspaceItems, workspaceSelection],
   );
   const xaiReady = providerStatuses.find((status) => status.providerId === "xai")?.available ?? true;
+  const ollamaReady = providerStatuses.find((status) => status.providerId === "ollama")?.available ?? false;
+  const providerReady = selectedProvider === "ollama" ? ollamaReady : xaiReady;
+  const currentModels = selectedProvider === "ollama" ? models.ollama : models.xai;
 
   const handleSend = agentMode ? sendAgentMessage : sendMessage;
 
@@ -1585,7 +1591,7 @@ function ChatPage() {
           <EmptyPanel
             eyebrow="Chat"
             title="Coding shell."
-            body="Use an xAI language model, run local commands in the footer terminal, and send workspace-backed prompts from this page."
+            body="Use xAI or Ollama language models, run local commands in the footer terminal, and send workspace-backed prompts from this page."
           />
         )}
       </div>
@@ -1603,29 +1609,62 @@ function ChatPage() {
               Agent mode
             </span>
           )}
-          {!xaiReady ? (
+          {!providerReady ? (
             <span className="rounded-full border border-amber-200/20 bg-amber-300/10 px-3 py-1 text-amber-100">
-              xAI unavailable
+              {selectedProvider === "ollama" ? "Ollama unavailable" : "xAI unavailable"}
             </span>
           ) : null}
         </div>
 
         <div className="rounded-[20px] border border-white/7 bg-black/30 p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <div className="rounded-xl border border-white/8 bg-black/35 px-2 py-1.5 text-[10px] font-semibold text-stone-200">
+            <button
+              type="button"
+              onClick={() => setSelectedProvider("xai")}
+              className={clsx(
+                "rounded-xl border px-2 py-1.5 text-[10px] font-semibold transition",
+                selectedProvider === "xai"
+                  ? "border-sky-300/30 bg-sky-300/15 text-sky-100"
+                  : "border-white/8 bg-black/35 text-stone-400 hover:bg-white/10 hover:text-stone-200",
+              )}
+            >
               xAI
-            </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedProvider("ollama")}
+              className={clsx(
+                "rounded-xl border px-2 py-1.5 text-[10px] font-semibold transition",
+                selectedProvider === "ollama"
+                  ? "border-orange-300/30 bg-orange-300/15 text-orange-100"
+                  : "border-white/8 bg-black/35 text-stone-400 hover:bg-white/10 hover:text-stone-200",
+              )}
+            >
+              Ollama
+            </button>
             <select
               value={selectedModel ?? ""}
               onChange={(event) => selectModel(event.target.value)}
               className="min-w-56 rounded-xl border border-white/8 bg-black/35 px-2 py-1.5 font-['IBM_Plex_Mono'] text-[10px] text-stone-300 outline-none transition focus:border-sky-300/40"
             >
-              {(models.xai.length ? models.xai : CHAT_MODELS.map((modelId) => ({ modelId, label: modelId } as const))).map(
-                (model) => (
-                  <option key={model.modelId} value={model.modelId}>
-                    {model.label}
-                  </option>
-                ),
+              {selectedProvider === "ollama" ? (
+                currentModels.length ? (
+                  currentModels.map((model) => (
+                    <option key={model.modelId} value={model.modelId}>
+                      {model.label}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No Ollama models installed</option>
+                )
+              ) : (
+                (currentModels.length ? currentModels : CHAT_MODELS.map((modelId) => ({ modelId, label: modelId } as const))).map(
+                  (model) => (
+                    <option key={model.modelId} value={model.modelId}>
+                      {model.label}
+                    </option>
+                  ),
+                )
               )}
             </select>
             <button
@@ -1673,7 +1712,7 @@ function ChatPage() {
               <button
                 type="button"
                 onClick={() => void handleSend()}
-                disabled={!xaiReady}
+                disabled={!providerReady}
                 className={clsx(
                   "flex items-center gap-1 rounded-xl border px-3 py-1.5 text-[10px] transition disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/4 disabled:text-stone-500",
                   agentMode
@@ -1926,6 +1965,10 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const generateImage = useAppStore((state) => state.generateImage);
   const generateVideo = useAppStore((state) => state.generateVideo);
   const ensureMediaLoaded = useAppStore((state) => state.ensureMediaLoaded);
+  const providerStatuses = useAppStore((state) => state.providerStatuses);
+  const models = useAppStore((state) => state.models);
+  const ollamaReady = providerStatuses.find((s) => s.providerId === "ollama")?.available ?? false;
+  const ollamaImageAvailable = ollamaReady && models.ollama.some((m) => OLLAMA_IMAGE_MODELS.some((om) => m.modelId.startsWith(om.split(":")[0])));
   const [mode, setMode] = useState<"image" | "video">("image");
   const [mediaPrompt, setMediaPrompt] = useState("");
   const [imageModel, setImageModel] = useState(settings?.xaiImageModel ?? IMAGE_MODELS[1]);
@@ -2049,10 +2092,38 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                     {modelId}
                   </button>
                 ))}
+                {mode === "image" && OLLAMA_IMAGE_MODELS.map((modelId) => (
+                  <button
+                    key={modelId}
+                    type="button"
+                    onClick={() => ollamaImageAvailable && setImageModel(modelId)}
+                    disabled={!ollamaImageAvailable}
+                    title={
+                      !ollamaReady
+                        ? "Ollama is not running — start with: ollama serve"
+                        : !ollamaImageAvailable
+                          ? `Model not installed — run: ollama pull ${modelId}`
+                          : `Generate with ${modelId} (local, macOS only)`
+                    }
+                    className={clsx(
+                      "rounded-xl border px-3 py-2 text-[10px] font-['IBM_Plex_Mono'] transition",
+                      !ollamaImageAvailable
+                        ? "cursor-not-allowed border-white/5 bg-black/20 text-stone-600"
+                        : imageModel === modelId
+                          ? "border-orange-300/20 bg-orange-300/12 text-orange-50"
+                          : "border-white/8 bg-black/30 text-stone-300 hover:bg-white/8",
+                    )}
+                  >
+                    {modelId}
+                    {!ollamaImageAvailable && (
+                      <span className="ml-1 text-[8px] text-stone-600">(unavailable)</span>
+                    )}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {mode === "image" ? (
+            {mode === "image" && !imageModel.startsWith("x/") ? (
               <>
                 <div className="grid gap-2">
                   <p className="text-[10px] uppercase tracking-[0.24em] text-stone-500">Resolution</p>
@@ -3131,6 +3202,9 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const [previewMode, setPreviewMode] = useState<"code" | "preview">("code");
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
   const [ideRightMode, setIdeRightMode] = useState<"assistant" | "browser">("assistant");
+  const models = useAppStore((state) => state.models);
+  const providerStatuses = useAppStore((state) => state.providerStatuses);
+  const [assistantProvider, setAssistantProvider] = useState<"xai" | "ollama">("xai");
   const [assistantModel, setAssistantModel] = useState(settings?.xaiModel ?? "grok-code-fast-1");
   const [assistantComposer, setAssistantComposer] = useState("");
   const [assistantConversationId, setAssistantConversationId] = useState<string>();
@@ -3477,7 +3551,7 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
 
     const handle = await api.sendMessage({
       conversationId,
-      providerId: "xai",
+      providerId: assistantProvider,
       modelId: assistantModel,
       userText: prompt,
       selectedWorkspaceItems: activeItem ? [activeItem.id] : [],
@@ -3877,16 +3951,58 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                       <Bot className="h-4 w-4" />
                     </div>
                   </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAssistantProvider("xai");
+                        setAssistantModel(settings?.xaiModel ?? "grok-code-fast-1");
+                      }}
+                      className={clsx(
+                        "rounded-xl border px-2 py-1.5 text-[10px] font-semibold transition",
+                        assistantProvider === "xai"
+                          ? "border-sky-300/30 bg-sky-300/15 text-sky-100"
+                          : "border-white/8 bg-black/35 text-stone-400 hover:bg-white/10 hover:text-stone-200",
+                      )}
+                    >
+                      xAI
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAssistantProvider("ollama");
+                        setAssistantModel(models.ollama[0]?.modelId ?? "qwen3.5:2b");
+                      }}
+                      className={clsx(
+                        "rounded-xl border px-2 py-1.5 text-[10px] font-semibold transition",
+                        assistantProvider === "ollama"
+                          ? "border-orange-300/30 bg-orange-300/15 text-orange-100"
+                          : "border-white/8 bg-black/35 text-stone-400 hover:bg-white/10 hover:text-stone-200",
+                      )}
+                    >
+                      Ollama
+                    </button>
+                  </div>
                   <select
                     value={assistantModel}
                     onChange={(event) => setAssistantModel(event.target.value)}
-                    className="mt-3 w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none focus:border-emerald-300/35"
+                    className="mt-2 w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none focus:border-emerald-300/35"
                   >
-                    {CHAT_MODELS.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
+                    {assistantProvider === "ollama" ? (
+                      models.ollama.length ? (
+                        models.ollama.map((m) => (
+                          <option key={m.modelId} value={m.modelId}>{m.label}</option>
+                        ))
+                      ) : (
+                        <option value="">No Ollama models installed</option>
+                      )
+                    ) : (
+                      CHAT_MODELS.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
                 <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">

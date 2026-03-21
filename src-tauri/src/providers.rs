@@ -25,6 +25,10 @@ const XAI_REALTIME_SECRET_ENDPOINT: &str = "https://api.x.ai/v1/realtime/client_
 const XAI_REALTIME_WEBSOCKET_URL: &str = "wss://api.x.ai/v1/realtime";
 const XAI_TTS_ENDPOINT: &str = "https://api.x.ai/v1/tts";
 
+const OLLAMA_BASE_URL: &str = "http://localhost:11434";
+const OLLAMA_CHAT_ENDPOINT: &str = "http://localhost:11434/v1/chat/completions";
+const OLLAMA_TAGS_ENDPOINT: &str = "http://localhost:11434/api/tags";
+
 #[derive(Clone)]
 pub struct ProviderService {
     client: Client,
@@ -58,14 +62,138 @@ impl ProviderService {
 
     pub async fn list_models(
         &self,
-        _provider: Option<ProviderId>,
+        provider: Option<ProviderId>,
     ) -> AppResult<Vec<ModelDescriptor>> {
-        Ok(chat_models())
+        match provider {
+            Some(ProviderId::Ollama) => self.list_ollama_models().await,
+            _ => Ok(chat_models()),
+        }
+    }
+
+    pub async fn list_ollama_models(&self) -> AppResult<Vec<ModelDescriptor>> {
+        let response = match self.client.get(OLLAMA_TAGS_ENDPOINT).send().await {
+            Ok(r) => r,
+            Err(_) => return Ok(Vec::new()),
+        };
+        if !response.status().is_success() {
+            return Ok(Vec::new());
+        }
+        let json: Value = response.json().await?;
+        let models = json
+            .get("models")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        let name = m.get("name").and_then(Value::as_str)?;
+                        Some(ModelDescriptor {
+                            provider_id: ProviderId::Ollama,
+                            model_id: name.to_string(),
+                            label: name.to_string(),
+                            supports_streaming: true,
+                            supports_workspace_context: true,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(models)
+    }
+
+    pub async fn check_ollama_available(&self) -> bool {
+        matches!(self.client.get(OLLAMA_BASE_URL).send().await, Ok(r) if r.status().is_success())
+    }
+
+    pub fn ollama_chat_endpoint() -> &'static str {
+        OLLAMA_CHAT_ENDPOINT
+    }
+
+    /// Check if a specific Ollama model is installed locally.
+    pub async fn has_ollama_model(&self, model_id: &str) -> bool {
+        let models = self.list_ollama_models().await.unwrap_or_default();
+        models.iter().any(|m| m.model_id == model_id)
+    }
+
+    /// Generate an image using Ollama's /api/generate endpoint (diffusion models).
+    /// Returns the image saved to disk as a MediaAsset.
+    /// Currently only works on macOS (Ollama limitation).
+    pub async fn generate_ollama_image(
+        &self,
+        request: &GenerateImageRequest,
+        output_dir: &Path,
+    ) -> AppResult<MediaAsset> {
+        std::fs::create_dir_all(output_dir)?;
+
+        let response = self
+            .client
+            .post(format!("{}/api/generate", OLLAMA_BASE_URL))
+            .json(&serde_json::json!({
+                "model": request.model_id,
+                "prompt": request.prompt,
+                "stream": false,
+            }))
+            .timeout(Duration::from_secs(300))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(AppError::message(format!(
+                "Ollama image generation failed: {body}"
+            )));
+        }
+
+        // Response is newline-delimited JSON. The final line with done:true
+        // contains the base64 PNG in the "image" field.
+        let body = response.text().await?;
+        let mut image_b64: Option<String> = None;
+        for line in body.lines().rev() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(json) = serde_json::from_str::<Value>(line) {
+                if json.get("done").and_then(Value::as_bool).unwrap_or(false) {
+                    if let Some(img) = json.get("image").and_then(Value::as_str) {
+                        image_b64 = Some(img.to_string());
+                    }
+                    break;
+                }
+            }
+        }
+
+        let b64 = image_b64.ok_or_else(|| {
+            AppError::message("Ollama image generation returned no image data")
+        })?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&b64)
+            .map_err(|e| AppError::message(format!("invalid image payload: {e}")))?;
+
+        let file_name = format!("{}.png", uuid::Uuid::new_v4());
+        let file_path = output_dir.join(&file_name);
+        std::fs::write(&file_path, &bytes)?;
+
+        let now = chrono::Utc::now().to_rfc3339();
+        Ok(MediaAsset {
+            id: uuid::Uuid::new_v4().to_string(),
+            category_id: request.category_id.clone(),
+            kind: "image".into(),
+            model_id: request.model_id.clone(),
+            prompt: request.prompt.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            source_url: None,
+            mime_type: Some("image/png".into()),
+            status: "completed".into(),
+            request_id: None,
+            metadata_json: None,
+            created_at: now.clone(),
+            updated_at: now,
+        })
     }
 
     pub async fn stream_chat<F>(
         &self,
-        _provider: ProviderId,
+        provider: ProviderId,
         model_id: &str,
         history: &[Message],
         workspace_context: &str,
@@ -77,8 +205,6 @@ impl ProviderService {
     where
         F: FnMut(String) -> AppResult<()>,
     {
-        let api_key = self.require_api_key()?;
-
         let mut messages = vec![serde_json::json!({
             "role": "system",
             "content": base_system_prompt(workspace_context),
@@ -104,13 +230,16 @@ impl ProviderService {
             request_body["max_tokens"] = serde_json::json!(max_tokens);
         }
 
-        let response = self
-            .client
-            .post(XAI_CHAT_ENDPOINT)
-            .bearer_auth(api_key)
-            .json(&request_body)
-            .send()
-            .await?;
+        let (endpoint, api_key) = match provider {
+            ProviderId::Ollama => (OLLAMA_CHAT_ENDPOINT, None),
+            _ => (XAI_CHAT_ENDPOINT, Some(self.require_api_key()?)),
+        };
+
+        let mut req = self.client.post(endpoint).json(&request_body);
+        if let Some(ref key) = api_key {
+            req = req.bearer_auth(key);
+        }
+        let response = req.send().await?;
 
         if !response.status().is_success() {
             return Err(AppError::message(extract_error(response).await?));

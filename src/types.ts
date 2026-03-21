@@ -1,4 +1,4 @@
-export type ProviderId = "xai";
+export type ProviderId = "xai" | "ollama";
 
 export interface ProviderStatus {
   providerId: ProviderId;

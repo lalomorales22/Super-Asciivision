@@ -386,6 +386,7 @@ fn resolve_ffmpeg_binary() -> PathBuf {
         std::env::var_os("FFMPEG_BIN").map(PathBuf::from),
         Some(PathBuf::from("/opt/homebrew/bin/ffmpeg")),
         Some(PathBuf::from("/usr/local/bin/ffmpeg")),
+        Some(PathBuf::from("/usr/bin/ffmpeg")),
         Some(PathBuf::from("ffmpeg")),
     ]
     .into_iter()

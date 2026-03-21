@@ -5,12 +5,15 @@ pub enum ProviderId {
     #[default]
     #[serde(rename = "xai")]
     Xai,
+    #[serde(rename = "ollama")]
+    Ollama,
 }
 
 impl ProviderId {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Xai => "xai",
+            Self::Ollama => "ollama",
         }
     }
 
@@ -18,11 +21,15 @@ impl ProviderId {
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Xai => "xAI",
+            Self::Ollama => "Ollama",
         }
     }
 
-    pub fn from_db(_value: &str) -> Self {
-        Self::Xai
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "ollama" => Self::Ollama,
+            _ => Self::Xai,
+        }
     }
 }
 

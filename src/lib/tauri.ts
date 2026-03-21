@@ -51,6 +51,8 @@ export const api = {
   stopHandsService: () => invoke<HandsStatus>("stop_hands_service"),
   listModels: (provider?: ProviderId) =>
     invoke<ModelDescriptor[]>("list_models", { provider }),
+  listOllamaModels: () =>
+    invoke<ModelDescriptor[]>("list_models", { provider: "ollama" }),
   readMediaDataUrl: (filePath: string) =>
     invoke<string>("read_media_data_url", { filePath }),
   getSettings: () => invoke<Settings>("get_settings"),

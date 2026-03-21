@@ -100,6 +100,7 @@ interface AppState {
   stopHandsService: () => Promise<void>;
   startTerminal: () => Promise<void>;
   selectModel: (modelId: string) => void;
+  setSelectedProvider: (provider: ProviderId) => void;
   setComposer: (value: string) => void;
   loadConversation: (conversationId: string) => Promise<void>;
   createConversation: () => Promise<void>;
@@ -161,6 +162,7 @@ interface AppState {
 
 const emptyModels: ModelMap = {
   xai: [],
+  ollama: [],
 };
 
 const fallbackSettings: Settings = {
@@ -180,7 +182,10 @@ const fallbackSettings: Settings = {
   handsRelayDesktopToken: "",
 };
 
-function pickModel(models: ModelMap) {
+function pickModel(models: ModelMap, provider: ProviderId = "xai") {
+  if (provider === "ollama") {
+    return models.ollama[0]?.modelId ?? "qwen3.5:2b";
+  }
   return models.xai[0]?.modelId ?? fallbackSettings.xaiModel ?? "grok-code-fast-1";
 }
 
@@ -507,10 +512,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   refreshModels: async () => {
-    const result = await api.listModels("xai");
+    const [xaiResult, ollamaResult] = await Promise.allSettled([
+      api.listModels("xai"),
+      api.listOllamaModels(),
+    ]);
+    const xaiModels = xaiResult.status === "fulfilled" ? xaiResult.value.filter((m) => m.providerId === "xai") : [];
+    const ollamaModels = ollamaResult.status === "fulfilled" ? ollamaResult.value.filter((m) => m.providerId === "ollama") : [];
     set((state) => ({
-      models: { xai: result.filter((model) => model.providerId === "xai") },
-      selectedModel: state.selectedModel ?? pickModel({ xai: result }),
+      models: { xai: xaiModels, ollama: ollamaModels },
+      selectedModel: state.selectedModel ?? pickModel({ xai: xaiModels, ollama: ollamaModels }, state.selectedProvider),
     }));
   },
 
@@ -577,6 +587,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   selectModel: (modelId) => set({ selectedModel: modelId }),
 
+  setSelectedProvider: (provider) =>
+    set((state) => ({
+      selectedProvider: provider,
+      selectedModel: pickModel(state.models, provider),
+    })),
+
   setComposer: (value) => set({ composer: value }),
 
   loadConversation: async (conversationId) => {
@@ -632,15 +648,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       await get().refreshConversations();
     }
 
-    const modelId = state.selectedModel ?? pickModel(state.models);
+    const provider = state.selectedProvider;
+    const modelId = state.selectedModel ?? pickModel(state.models, provider);
     if (!modelId) {
-      set({ error: "No xAI model is available." });
+      set({ error: "No model is available." });
       return;
     }
 
     const request: ChatRequest = {
       conversationId,
-      providerId: "xai",
+      providerId: provider,
       modelId,
       userText,
       selectedWorkspaceItems: Object.entries(state.workspaceSelection)
@@ -668,15 +685,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       await get().refreshConversations();
     }
 
-    const modelId = state.selectedModel ?? pickModel(state.models);
+    const provider = state.selectedProvider;
+    const modelId = state.selectedModel ?? pickModel(state.models, provider);
     if (!modelId) {
-      set({ error: "No xAI model is available." });
+      set({ error: "No model is available." });
       return;
     }
 
     const request: AgentChatRequest = {
       conversationId,
-      providerId: "xai",
+      providerId: provider,
       modelId,
       userText,
       selectedWorkspaceItems: Object.entries(state.workspaceSelection)

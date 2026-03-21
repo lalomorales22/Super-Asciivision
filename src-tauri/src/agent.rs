@@ -20,6 +20,8 @@ pub struct AgentConfig {
     /// Workspace root directories available to tools.
     #[allow(dead_code)]
     pub workspace_roots: Vec<String>,
+    /// Override the chat endpoint (defaults to xAI).
+    pub endpoint_url: Option<String>,
 }
 
 impl Default for AgentConfig {
@@ -29,6 +31,7 @@ impl Default for AgentConfig {
             system_prompt: String::new(),
             max_iterations: 25,
             workspace_roots: Vec::new(),
+            endpoint_url: None,
         }
     }
 }
@@ -155,10 +158,10 @@ struct ChatErrorDetail {
 
 const XAI_CHAT_ENDPOINT: &str = "https://api.x.ai/v1/chat/completions";
 
-/// Runs the agentic loop: sends chat requests with tool definitions to xAI,
-/// executes any tool calls the model returns, feeds results back, and repeats
-/// until the model produces a final text response (or the iteration limit /
-/// cancellation token fires).
+/// Runs the agentic loop: sends chat requests with tool definitions to an
+/// OpenAI-compatible endpoint, executes any tool calls the model returns,
+/// feeds results back, and repeats until the model produces a final text
+/// response (or the iteration limit / cancellation token fires).
 pub async fn run_agent(
     client: &reqwest::Client,
     api_key: &str,
@@ -247,15 +250,19 @@ pub async fn run_agent(
             request_body["tool_choice"] = Value::String("auto".into());
         }
 
-        // -- Send request to xAI --------------------------------------------
+        // -- Send request to LLM endpoint ------------------------------------
         debug!("agent: sending request (iteration {})", iterations);
 
-        let response = client
-            .post(XAI_CHAT_ENDPOINT)
-            .bearer_auth(api_key)
-            .json(&request_body)
-            .send()
-            .await?;
+        let endpoint = config
+            .endpoint_url
+            .as_deref()
+            .unwrap_or(XAI_CHAT_ENDPOINT);
+
+        let mut req = client.post(endpoint).json(&request_body);
+        if !api_key.is_empty() {
+            req = req.bearer_auth(api_key);
+        }
+        let response = req.send().await?;
 
         if !response.status().is_success() {
             let status = response.status();

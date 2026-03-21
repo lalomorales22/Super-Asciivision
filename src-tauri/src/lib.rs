@@ -88,6 +88,18 @@ async fn get_provider_status(state: State<'_, AppState>) -> Result<Vec<ProviderS
             error: None,
         });
     }
+    // Ollama doesn't need an API key — just check if the service is reachable
+    let ollama_available = state.providers.check_ollama_available().await;
+    statuses.push(ProviderStatus {
+        provider_id: ProviderId::Ollama,
+        configured: ollama_available,
+        available: ollama_available,
+        error: if ollama_available {
+            None
+        } else {
+            Some("Ollama is not running. Start it with: ollama serve".into())
+        },
+    });
     Ok(statuses)
 }
 
@@ -423,11 +435,23 @@ async fn generate_image_command(
     state: State<'_, AppState>,
     input: GenerateImageRequest,
 ) -> Result<MediaAsset, String> {
-    let asset = state
-        .providers
-        .generate_image(&input, &media_output_dir(&app, "images"))
-        .await
-        .map_err(to_command_error)?;
+    let is_ollama = input.model_id.starts_with("x/")
+        || input.model_id.contains("flux")
+        || input.model_id.contains("z-image");
+    let output_dir = media_output_dir(&app, "images");
+    let asset = if is_ollama {
+        state
+            .providers
+            .generate_ollama_image(&input, &output_dir)
+            .await
+            .map_err(to_command_error)?
+    } else {
+        state
+            .providers
+            .generate_image(&input, &output_dir)
+            .await
+            .map_err(to_command_error)?
+    };
     state
         .db
         .insert_media_asset(&asset)
@@ -776,7 +800,12 @@ async fn send_agent_message(
 
     let db = state.db.clone();
     let providers = state.providers.clone();
-    let api_key = providers.require_api_key_public().map_err(to_command_error)?;
+    let is_ollama = input.provider_id == ProviderId::Ollama;
+    let api_key = if is_ollama {
+        String::new()
+    } else {
+        providers.require_api_key_public().map_err(to_command_error)?
+    };
 
     tauri::async_runtime::spawn(async move {
         let emit_started = app.emit(
@@ -818,6 +847,11 @@ async fn send_agent_message(
             system_prompt,
             max_iterations: input.max_iterations.unwrap_or(25) as usize,
             workspace_roots: workspace_roots.clone(),
+            endpoint_url: if is_ollama {
+                Some(providers::ProviderService::ollama_chat_endpoint().to_string())
+            } else {
+                None
+            },
         };
         let tool_registry = tools::ToolRegistry::new(workspace_roots);
 
@@ -974,10 +1008,20 @@ async fn launch_asciivision(
             .ok()
             .and_then(|p| p.parent().map(|d| d.to_path_buf()));
 
-        let target_triple = if cfg!(target_arch = "aarch64") {
-            "aarch64-apple-darwin"
+        let target_triple = if cfg!(target_os = "macos") {
+            if cfg!(target_arch = "aarch64") {
+                "aarch64-apple-darwin"
+            } else {
+                "x86_64-apple-darwin"
+            }
+        } else if cfg!(target_os = "linux") {
+            if cfg!(target_arch = "aarch64") {
+                "aarch64-unknown-linux-gnu"
+            } else {
+                "x86_64-unknown-linux-gnu"
+            }
         } else {
-            "x86_64-apple-darwin"
+            "x86_64-unknown-linux-gnu"
         };
 
         let mut candidates: Vec<std::path::PathBuf> = Vec::new();
@@ -1589,7 +1633,7 @@ pub fn run() {
     // Migrate API keys from the old keychain service name
     {
         let old_service = "com.megabrain2.grokdesktop";
-        for provider in [types::ProviderId::Xai] {
+        for provider in [types::ProviderId::Xai, types::ProviderId::Ollama] {
             if secrets.has_api_key(provider).unwrap_or(false) {
                 continue; // already has a key under the new service
             }
