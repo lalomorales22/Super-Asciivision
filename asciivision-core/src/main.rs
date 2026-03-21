@@ -43,7 +43,7 @@ use ai::{
 use analytics::AnalyticsPanel;
 use client::VideoChatClient;
 use db::Database;
-use effects::EffectsEngine;
+use effects::{EffectsEngine, render_wireframe_cube};
 use games::{GameKind, GamesPanel};
 use memory::AgentMemory;
 use server::VideoChatServer;
@@ -62,6 +62,7 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/help", "show operator manual"),
     ("/clear", "purge terminal buffer"),
     ("/video", "toggle video bus"),
+    ("/video ", "load local video file into bus"),
     ("/youtube ", "stream YouTube into video bus"),
     ("/webcam", "toggle live ascii webcam feed"),
     ("/3d", "toggle 3D fx"),
@@ -100,19 +101,25 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
 ];
 
 const LARGE_LOGO: &[&str] = &[
-    "  █████  ███████ ██████ ██ ██ ██   ██ ██ ███████ ██  ██████  ███   ██",
-    " ██   ██ ██      ██     ██ ██ ██   ██ ██ ██      ██ ██   ██ ████  ██",
-    " ████████ █████   ██     ██ ██ ██   ██ ██ █████   ██ ██   ██ ██ ██ ██",
-    " ██   ██     ██  ██     ██ ██  ██ ██  ██     ██  ██ ██   ██ ██  ████",
-    " ██   ██ ███████ ██████ ██ ██   ███   ██ ███████ ██  ██████  ██   ██",
+    "     _____  ___________ _____ _____        _____ _____ _____ _____ _____  _____",
+    "    /  _  \\/   _____/  |     \\__  |__     /  |  |     |   __|     |   | |/   __|",
+    "   /  /_\\  \\_____  \\|   __|  |  | |  |   /   |  |  |  |   __|  ---|   | |\\__  \\",
+    "  /    |    \\       |  |  |  |  | |  |__/    |  |  |  |  |__|     |     |/       |",
+    "  \\____|__  /_______/____|  |__|  |____/\\_______\\_____|_____|_____|__|\\__|_______/",
+    "     ____\\/ ____ ______  _______ _____ __  __ ___ _______ ______ _____ ______ ___ ",
+    "    / ___/ / __ \\|  _  \\| ____/|  _  |  \\/  | __|___  __|  __  |   | | ____/ __|",
+    "   / /    / /  \\ | | | || __/  | | | |      | __|  | |  | |  | | |\\  | __/\\__ \\",
+    "  / /___ / /___/ | |_| || /__  | |_| | |\\/| | |__  | |  | |__| | | \\ | |__ ___) |",
+    "  \\____/ \\_____/ |____/ |____| |_____|_|  |_|____| |_|  |______|_|  \\|____|____/ ",
 ];
 
 const SMALL_LOGO: &[&str] = &[
-    "    ___   _____  ____ ____ _    __ ____ _____ ____  _   __",
-    "   /   | / ___/ / ___/  _/| |  / //  _// ___//  _/ / | / /",
-    "  / /| | \\__ \\/ /   / /  | | / / / / / /__ / /  /  |/ / ",
-    " / ___ |___/ / /___/ /   | |/ /_/ / ___/ /_/ / / /|  /  ",
-    "/_/  |_/____/\\____/___/  |___//___/____//___//_/ |_/   ",
+    "  ██████╗ ██████╗██████╗██╗██╗██╗   ██╗██╗██████╗██╗ █████╗ ██╗  ██╗",
+    "  ██╔══██╗██╔═══╝██╔═══╝██║██║██║   ██║██║██╔═══╝██║██╔══██╗████╗██║",
+    "  ██████╔╝╚████╗ ██║    ██║██║╚██╗ ██╔╝██║╚████╗ ██║██║  ██║██╔████║",
+    "  ██╔══██╗ ╚══██╗██║    ██║██║ ╚████╔╝ ██║ ╚══██╗██║██║  ██║██║╚███║",
+    "  ██║  ██║██████║╚█████╗██║██║  ╚██╔╝  ██║██████║██║╚█████╔╝██║ ╚██║",
+    "  ╚═╝  ╚═╝╚═════╝ ╚════╝╚═╝╚═╝   ╚═╝   ╚═╝╚═════╝╚═╝ ╚════╝ ╚═╝  ╚═╝",
 ];
 
 const SCROLLER_TEXT: &str =
@@ -1448,6 +1455,33 @@ impl App {
             return;
         }
 
+        if let Some(path) = input.strip_prefix("/video ") {
+            let path = path.trim().to_string();
+            if path.is_empty() {
+                self.add_system_message("usage: /video /path/to/file.mp4");
+                return;
+            }
+            let video_path = PathBuf::from(&path);
+            if !video_path.exists() {
+                self.add_system_message(format!("file not found: {}", path));
+                return;
+            }
+            let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((132, 46));
+            let decode_cols = term_cols.saturating_sub(6).max(40);
+            let decode_rows = term_rows.saturating_sub(8).max(20);
+            match VideoPlayer::new(video_path, (decode_cols, decode_rows), true) {
+                Ok(player) => {
+                    self.video = Some(player);
+                    self.video_enabled = true;
+                    self.video_source_label = path.clone();
+                    self.status_note = format!("playing: {}", truncate(&path, 40));
+                    self.add_system_message(format!("video loaded: {}", path));
+                }
+                Err(e) => self.add_system_message(format!("video error: {}", e)),
+            }
+            return;
+        }
+
         if input == "/video" {
             self.video_enabled = !self.video_enabled;
             self.status_note = if self.video_enabled {
@@ -2139,11 +2173,20 @@ impl App {
     fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
         let phase = self.intro_started.elapsed().as_secs_f32();
-        render_background(frame.buffer_mut(), area, phase);
 
         match self.mode {
-            AppMode::Intro => self.render_intro(frame, area, phase),
-            AppMode::Chat => self.render_chat(frame, area, phase),
+            AppMode::Intro => {
+                render_background(frame.buffer_mut(), area, phase);
+                self.render_intro(frame, area, phase);
+            }
+            AppMode::Chat => {
+                // Solid fill — skip expensive per-cell animated background during chat
+                frame.render_widget(
+                    Block::default().style(Style::default().bg(t().bg_base)),
+                    area,
+                );
+                self.render_chat(frame, area, phase);
+            }
             AppMode::Exit => {}
         }
     }
@@ -2163,8 +2206,8 @@ impl App {
         });
 
         render_raster_bars(frame.buffer_mut(), inner, phase);
+        let video_area = centered_area(inner, 82, 54);
         if let Some(video) = &self.video {
-            let video_area = centered_area(inner, 82, 54);
             let shell = Block::default()
                 .title(" LIVE FEED // DECOMPRESSING ")
                 .title_style(Style::default().fg(t().accent2).bold())
@@ -2179,6 +2222,18 @@ impl App {
                 }),
                 0.95,
             );
+        } else {
+            let shell = Block::default()
+                .title(" SIGNAL // SYNTHETIC RASTER ")
+                .title_style(Style::default().fg(t().accent2).bold())
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(t().accent3));
+            frame.render_widget(shell, video_area);
+            let effect_inner = video_area.inner(Margin {
+                horizontal: 1,
+                vertical: 1,
+            });
+            render_wireframe_cube(frame.buffer_mut(), effect_inner, phase);
         }
 
         let burst_x = inner.x + inner.width.saturating_mul(22) / 100;
@@ -2202,10 +2257,10 @@ impl App {
         let info = vec![
             Line::from(vec![
                 Span::styled("v2.0.0", Style::default().fg(t().muted)),
-                Span::styled("  (POWERHOUSE)  ", Style::default().fg(t().text)),
+                Span::styled("  (CODENAMES)  ", Style::default().fg(t().text)),
                 Span::styled("//", Style::default().fg(t().accent1)),
                 Span::styled(
-                    "  ALL-IN-ONE TERMINAL COMMAND CENTER",
+                    "  TERMINAL COMMAND CENTER",
                     Style::default().fg(t().accent4).bold(),
                 ),
             ]),
@@ -2574,7 +2629,21 @@ impl App {
             return;
         }
 
-        render_synthetic_scope(frame.buffer_mut(), inner, phase);
+        // Animated idle: spinning wireframe cube with "NO SIGNAL" message
+        render_wireframe_cube(frame.buffer_mut(), inner, phase);
+        if inner.height > 4 {
+            let msg_y = inner.y + inner.height.saturating_sub(2);
+            let msg = "NO SIGNAL // /video <path> or /youtube <url>";
+            let msg_x = inner.x + inner.width.saturating_sub(msg.len() as u16) / 2;
+            render_gradient_text(
+                frame.buffer_mut(),
+                msg_x,
+                msg_y,
+                msg,
+                t().accent4,
+                t().muted,
+            );
+        }
     }
 
     fn render_webcam_panel(&self, frame: &mut Frame, area: Rect, _phase: f32) {
@@ -3542,37 +3611,61 @@ fn render_logo(buffer: &mut Buffer, x: u16, y: u16, lines: &[&str], phase: f32) 
     let buf_area = *buffer.area();
     let max_x = buf_area.x + buf_area.width;
     let max_y = buf_area.y + buf_area.height;
+    let line_count = lines.len() as f32;
+
     for (row, line) in lines.iter().enumerate() {
+        let row_ratio = row as f32 / line_count.max(1.0);
         for (column, glyph) in line.chars().enumerate() {
             if glyph == ' ' {
                 continue;
             }
+            // Deep shadow layer (offset +1, +1) — dark base
             let sx = x.saturating_add(column as u16 + 1);
             let sy = y.saturating_add(row as u16 + 1);
             if sx < max_x && sy < max_y {
                 if let Some(shadow) = buffer.cell_mut((sx, sy)) {
                     shadow.set_char(glyph);
-                    shadow.set_fg(Color::Rgb(37, 18, 10));
+                    shadow.set_fg(Color::Rgb(20, 10, 30));
                 }
             }
+            // Main glyph layer — animated gradient with 3D depth
             let px = x.saturating_add(column as u16);
             let py = y.saturating_add(row as u16);
             if px < max_x && py < max_y {
-                let blend = ((column as f32 / line.len().max(1) as f32) + phase * 0.07).fract();
+                let col_ratio = column as f32 / line.len().max(1) as f32;
+                // Wave effect: color shifts in a sine wave across the text
+                let wave = (col_ratio * 3.0 + phase * 0.4 + row_ratio * 2.0).sin() * 0.5 + 0.5;
+                // Top rows are brighter (highlight), bottom rows dimmer (shadow)
+                let depth_brightness = 1.0 - row_ratio * 0.35;
+                // Shimmer pulse
+                let shimmer = ((col_ratio * 8.0 - phase * 1.2).sin() * 0.5 + 0.5) * 0.15;
+
+                let r = ((120.0 + wave * 135.0) * depth_brightness + shimmer * 60.0).min(255.0) as u8;
+                let g = ((180.0 + wave * 75.0) * depth_brightness + shimmer * 40.0).min(255.0) as u8;
+                let b = ((220.0 + (1.0 - wave) * 35.0) * depth_brightness + shimmer * 80.0).min(255.0) as u8;
+
                 if let Some(cell) = buffer.cell_mut((px, py)) {
                     cell.set_char(glyph);
-                    cell.set_fg(mix_color(t().accent1, t().accent2, blend));
+                    cell.set_fg(Color::Rgb(r, g, b));
                 }
             }
         }
     }
 
+    // Subtitle with pulsing glow
+    let subtitle = "TERMINAL COMMAND CENTER // AI + VIDEO + WEBCAM + 3D + ANALYTICS";
+    let sub_x = x + 4;
+    let sub_y = y + lines.len() as u16 + 1;
+    let pulse = (phase * 0.8).sin() * 0.15 + 0.85;
+    let sr = (180.0 * pulse) as u8;
+    let sg = (220.0 * pulse) as u8;
+    let sb = (255.0 * pulse) as u8;
     render_gradient_text(
         buffer,
-        x + 40.min(18),
-        y + lines.len() as u16 + 1,
-        "CLI // AI + OPS + VIDEO + WEBCAM + 3D + CHAT + ANALYTICS",
-        t().accent4,
+        sub_x,
+        sub_y,
+        subtitle,
+        Color::Rgb(sr, sg, sb),
         t().text,
     );
 }
@@ -3653,31 +3746,6 @@ fn render_equalizer(buffer: &mut Buffer, area: Rect, phase: f32) {
             if let Some(cell) = buffer.cell_mut((x, y)) {
                 cell.set_char('\u{2588}');
                 cell.set_fg(mix_color(t().accent1, t().accent4, i as f32 / columns.max(1) as f32));
-            }
-        }
-    }
-}
-
-fn render_synthetic_scope(buffer: &mut Buffer, area: Rect, phase: f32) {
-    for x in 0..area.width {
-        let wave = ((phase * 2.1 + x as f32 * 0.17).sin() * 0.35 + 0.5) * area.height as f32;
-        let y = area.y + area.height.saturating_sub(wave as u16 + 1);
-        if y >= area.y + area.height {
-            continue;
-        }
-        if let Some(cell) = buffer.cell_mut((area.x + x, y)) {
-            cell.set_char('*');
-            cell.set_fg(mix_color(t().accent1, t().accent4, x as f32 / area.width.max(1) as f32));
-        }
-    }
-
-    for row in (0..area.height).step_by(3) {
-        for column in 0..area.width {
-            if let Some(cell) = buffer.cell_mut((area.x + column, area.y + row)) {
-                if cell.symbol() == " " {
-                    cell.set_char('\u{00B7}');
-                    cell.set_fg(Color::Rgb(32, 69, 77));
-                }
             }
         }
     }
@@ -3874,11 +3942,10 @@ async fn run_app(
             )?;
             // 2) reset ratatui's back buffer so next draw() diffs against blank
             terminal.clear()?;
-            // 3) immediately draw the new mode's first frame
-            terminal.draw(|frame| app.render(frame))?;
         }
         terminal.draw(|frame| app.render(frame))?;
-        tokio::time::sleep(Duration::from_millis(16)).await;
+        // 30fps — TUI content doesn't benefit from 60fps, saves CPU on ARM
+        tokio::time::sleep(Duration::from_millis(33)).await;
     }
 
     Ok(())

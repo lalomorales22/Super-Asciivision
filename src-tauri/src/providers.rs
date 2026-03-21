@@ -109,6 +109,7 @@ impl ProviderService {
     }
 
     /// Check if a specific Ollama model is installed locally.
+    #[allow(dead_code)]
     pub async fn has_ollama_model(&self, model_id: &str) -> bool {
         let models = self.list_ollama_models().await.unwrap_or_default();
         models.iter().any(|m| m.model_id == model_id)

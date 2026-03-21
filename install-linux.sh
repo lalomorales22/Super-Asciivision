@@ -8,6 +8,9 @@ set -euo pipefail
 #
 # Supported: Ubuntu/Debian, Fedora/RHEL,
 #            Arch Linux, openSUSE
+#
+# Tested on: Ubuntu 22.04 (Jetson Orin Nano),
+#            Ubuntu 24.04, Fedora 40, Arch
 # ──────────────────────────────────────────────
 
 APP_NAME="Super ASCIIVision"
@@ -46,6 +49,24 @@ fi
 
 info "Detected distro family: $DISTRO"
 
+# ── Fix pango version conflicts (NVIDIA Jetson / L4T) ──
+# NVIDIA's Jetson Linux ships patched pango (e.g., 1.50.6+ds-2ubuntu1)
+# that conflicts with the upstream -dev package. Downgrade if needed.
+if [[ "$DISTRO" == "debian" ]]; then
+  PANGO_INSTALLED=$(dpkg-query -W -f='${Version}' libpango-1.0-0 2>/dev/null || echo "")
+  PANGO_CANDIDATE=$(apt-cache policy libpango1.0-dev 2>/dev/null | grep "Candidate:" | awk '{print $2}')
+  if [[ -n "$PANGO_INSTALLED" ]] && [[ -n "$PANGO_CANDIDATE" ]] && [[ "$PANGO_INSTALLED" != "$PANGO_CANDIDATE" ]]; then
+    warn "Pango version mismatch detected (installed: $PANGO_INSTALLED, dev needs: $PANGO_CANDIDATE)"
+    info "Aligning pango packages to $PANGO_CANDIDATE (safe — same upstream code)..."
+    sudo apt-get install -y --allow-downgrades \
+      "libpango-1.0-0=$PANGO_CANDIDATE" \
+      "libpangocairo-1.0-0=$PANGO_CANDIDATE" \
+      "libpangoft2-1.0-0=$PANGO_CANDIDATE" \
+      "libpangoxft-1.0-0=$PANGO_CANDIDATE" \
+      "gir1.2-pango-1.0=$PANGO_CANDIDATE" 2>/dev/null || true
+  fi
+fi
+
 # ── System dependencies ────────────────────
 install_deps() {
   case "$DISTRO" in
@@ -56,13 +77,12 @@ install_deps() {
         build-essential pkg-config libclang-dev curl git \
         libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
         libavformat-dev libavcodec-dev libswscale-dev libavutil-dev libavdevice-dev \
-        libsecret-1-dev \
+        libsecret-1-dev libssl-dev \
         ffmpeg yt-dlp
       ok "apt dependencies installed"
       ;;
     fedora)
       info "Installing system dependencies via dnf..."
-      # RPM Fusion for ffmpeg-devel
       if ! rpm -q rpmfusion-free-release >/dev/null 2>&1; then
         warn "Enabling RPM Fusion (needed for FFmpeg dev packages)..."
         sudo dnf install -y \
@@ -70,7 +90,7 @@ install_deps() {
           2>/dev/null || true
       fi
       sudo dnf install -y \
-        gcc pkg-config clang-devel curl git \
+        gcc pkg-config clang-devel curl git openssl-devel \
         webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel \
         ffmpeg-devel libsecret-devel \
         ffmpeg yt-dlp
@@ -79,7 +99,7 @@ install_deps() {
     arch)
       info "Installing system dependencies via pacman..."
       sudo pacman -Syu --noconfirm --needed \
-        base-devel pkg-config clang curl git \
+        base-devel pkg-config clang curl git openssl \
         webkit2gtk-4.1 gtk3 libappindicator-gtk3 librsvg \
         ffmpeg libsecret \
         yt-dlp
@@ -88,7 +108,7 @@ install_deps() {
     suse)
       info "Installing system dependencies via zypper..."
       sudo zypper install -y \
-        gcc pkg-config libclang-devel curl git \
+        gcc pkg-config libclang-devel curl git libopenssl-devel \
         webkit2gtk3-devel gtk3-devel libappindicator3-devel librsvg-devel \
         ffmpeg-devel libsecret-devel \
         ffmpeg yt-dlp
@@ -120,6 +140,12 @@ else
 fi
 
 # ── Rust ────────────────────────────────────
+# Always source cargo env in case Rust was installed in a previous
+# run of this script but the current shell doesn't have it in PATH.
+if [[ -f "$HOME/.cargo/env" ]]; then
+  source "$HOME/.cargo/env"
+fi
+
 if ! command -v rustc &>/dev/null; then
   info "Installing Rust via rustup..."
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -206,6 +232,10 @@ fi
 
 echo ""
 ok "Done! Super ASCIIVision is installed."
+echo ""
+echo "   Launch the app:"
+echo "     super-asciivision          (if ~/.local/bin is in PATH)"
+echo "     $INSTALL_DIR/super-asciivision"
 echo ""
 echo "   To use Ollama for local AI chat:"
 echo "   1. Start Ollama:  ollama serve"

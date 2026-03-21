@@ -3203,7 +3203,6 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
   const [ideRightMode, setIdeRightMode] = useState<"assistant" | "browser">("assistant");
   const models = useAppStore((state) => state.models);
-  const providerStatuses = useAppStore((state) => state.providerStatuses);
   const [assistantProvider, setAssistantProvider] = useState<"xai" | "ollama">("xai");
   const [assistantModel, setAssistantModel] = useState(settings?.xaiModel ?? "grok-code-fast-1");
   const [assistantComposer, setAssistantComposer] = useState("");

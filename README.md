@@ -67,7 +67,9 @@ cd Super-Asciivision
 ./install-linux.sh
 ```
 
-The script installs all system dependencies (Tauri prerequisites, FFmpeg dev libs, libsecret, LLVM, Node.js, Rust, Ollama), builds both apps, and installs the binary to `~/.local/bin`.
+The script handles everything: system dependencies (Tauri/WebKit, FFmpeg dev libs, libsecret, libssl, LLVM/libclang), Node.js, Rust, Ollama, builds both apps, and installs the binary to `~/.local/bin`. First build takes a while (compiling ~1000 Rust crates) — subsequent rebuilds are fast.
+
+Tested on: Ubuntu 22.04 (NVIDIA Jetson Orin Nano aarch64), Ubuntu 24.04, Fedora, Arch.
 
 #### Ollama Setup (Local AI)
 
@@ -84,6 +86,22 @@ ollama pull qwen3.5:2b
 Then in the app, click the **Ollama** button (next to xAI) in the Chat or IDE pages to switch to local models. Your installed Ollama models will appear in the dropdown automatically.
 
 > **Note:** Ollama runs entirely on your machine — no API key needed, no data leaves your device.
+
+#### Troubleshooting (Linux)
+
+**Pango version mismatch (Jetson / L4T):** If `apt` fails with `libpango1.0-dev` dependency errors, NVIDIA's patched pango conflicts with the upstream `-dev` package. The install script handles this automatically, but if you hit it manually:
+```bash
+sudo apt-get install -y --allow-downgrades \
+  libpango-1.0-0=1.50.6+ds-2 libpangocairo-1.0-0=1.50.6+ds-2 \
+  libpangoft2-1.0-0=1.50.6+ds-2 libpangoxft-1.0-0=1.50.6+ds-2 \
+  gir1.2-pango-1.0=1.50.6+ds-2
+```
+
+**OpenSSL not found:** Install `libssl-dev` (Debian/Ubuntu), `openssl-devel` (Fedora), or `libopenssl-devel` (openSUSE).
+
+**`rustc: command not found` after install:** Run `source "$HOME/.cargo/env"` or open a new terminal.
+
+**ASCIIVision laggy on ARM:** The intro video + ASCII rendering is CPU-intensive. Skip the intro with `--skip-intro` or press Enter/Space immediately. See `asciivision --help` for options.
 
 ---
 

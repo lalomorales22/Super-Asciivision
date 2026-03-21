@@ -413,7 +413,7 @@ fn new_particle(rng: &mut impl Rng, w: u16, h: u16) -> Particle {
     }
 }
 
-fn render_plasma(buffer: &mut Buffer, area: Rect, phase: f32) {
+pub fn render_plasma(buffer: &mut Buffer, area: Rect, phase: f32) {
     for y in 0..area.height {
         for x in 0..area.width {
             let fx = x as f32 / area.width.max(1) as f32;
@@ -446,7 +446,7 @@ fn render_plasma(buffer: &mut Buffer, area: Rect, phase: f32) {
     }
 }
 
-fn render_wireframe_cube(buffer: &mut Buffer, area: Rect, phase: f32) {
+pub fn render_wireframe_cube(buffer: &mut Buffer, area: Rect, phase: f32) {
     let cx = area.width as f32 / 2.0;
     let cy = area.height as f32 / 2.0;
     let scale = (cx.min(cy * 2.0) * 0.6).max(4.0);

@@ -357,6 +357,8 @@ pub async fn create_asciivision_session(
         .map_err(|error| AppError::message(error.to_string()))?;
 
     let mut command = CommandBuilder::new(&binary_path);
+    // Skip the intro when launched inside Tauri — the desktop shell provides its own UI
+    command.arg("--skip-intro");
     // Set CWD so the asciivision binary can find demo-videos/demo.mp4.
     // Search several candidate roots:
     //   1. Next to the binary itself (bundled app)
