@@ -252,11 +252,16 @@ impl ProviderService {
         };
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
-        while let Some(chunk) = stream.next().await {
+        loop {
             if cancel.is_cancelled() {
                 return Err(AppError::message("cancelled"));
             }
-            let chunk = chunk?;
+            let maybe_chunk = tokio::time::timeout(Duration::from_secs(60), stream.next()).await;
+            let chunk = match maybe_chunk {
+                Ok(Some(chunk)) => chunk?,
+                Ok(None) => break,
+                Err(_) => return Err(AppError::message("stream timed out after 60 seconds")),
+            };
             buffer.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(event) = take_sse_event(&mut buffer) {
                 let data = event
@@ -518,47 +523,61 @@ impl ProviderService {
         request: &RealtimeSessionRequest,
     ) -> AppResult<RealtimeSession> {
         let api_key = self.require_api_key()?;
-        let response = self
+        let model_id = request
+            .model_id
+            .as_deref()
+            .unwrap_or("grok-3-mini-fast");
+        let websocket_url = format!("{}?model={}", XAI_REALTIME_WEBSOCKET_URL, model_id);
+
+        // Try ephemeral client_secrets endpoint first (OpenAI-compatible)
+        let ephemeral = self
             .client
             .post(XAI_REALTIME_SECRET_ENDPOINT)
-            .bearer_auth(api_key)
+            .bearer_auth(&api_key)
             .json(&serde_json::json!({
                 "expires_after": { "anchor": "created_at", "seconds": 900 },
             }))
             .send()
-            .await?;
+            .await;
 
-        if !response.status().is_success() {
-            return Err(AppError::message(extract_error(response).await?));
+        if let Ok(response) = ephemeral {
+            if response.status().is_success() {
+                if let Ok(json) = response.json::<Value>().await {
+                    let secret = json
+                        .get("client_secret")
+                        .and_then(|v| v.get("value").or_else(|| v.get("secret")))
+                        .or_else(|| json.get("value"))
+                        .and_then(Value::as_str);
+                    let expires_at = json
+                        .get("client_secret")
+                        .and_then(|v| v.get("expires_at"))
+                        .or_else(|| json.get("expires_at"))
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string);
+                    if let Some(secret) = secret {
+                        info!("realtime: using ephemeral client secret");
+                        return Ok(RealtimeSession {
+                            client_secret: secret.to_string(),
+                            expires_at,
+                            websocket_url,
+                            model_id: Some(model_id.to_string()),
+                            voice: request.voice.clone(),
+                            proxy_port: None,
+                        });
+                    }
+                }
+            }
         }
 
-        let json: Value = response.json().await?;
-        let client_secret = json
-            .get("client_secret")
-            .and_then(|value| value.get("value").or_else(|| value.get("secret")))
-            .or_else(|| json.get("value"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::message("xAI realtime client secret was missing"))?
-            .to_string();
-        let expires_at = json
-            .get("client_secret")
-            .and_then(|value| value.get("expires_at"))
-            .or_else(|| json.get("expires_at"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string);
-
-        let model_id = request
-            .model_id
-            .as_deref()
-            .unwrap_or("grok-realtime");
-        let websocket_url = format!("{}?model={}", XAI_REALTIME_WEBSOCKET_URL, model_id);
-
+        // Fallback: use the API key directly (desktop app — safe to expose to local webview)
+        info!("realtime: ephemeral secret unavailable, using API key directly");
         Ok(RealtimeSession {
-            client_secret,
-            expires_at,
+            client_secret: api_key,
+            expires_at: None,
             websocket_url,
             model_id: Some(model_id.to_string()),
             voice: request.voice.clone(),
+            proxy_port: None,
         })
     }
 

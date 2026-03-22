@@ -343,6 +343,7 @@ pub struct TerminalEvent {
 #[serde(rename_all = "camelCase")]
 pub struct NewMediaCategory {
     pub name: String,
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -358,6 +359,7 @@ pub struct UpdateMediaAssetRequest {
 pub struct MediaCategory {
     pub id: String,
     pub name: String,
+    pub kind: Option<String>,
     pub created_at: String,
     pub item_count: usize,
 }
@@ -451,6 +453,7 @@ pub struct RealtimeSession {
     pub websocket_url: String,
     pub model_id: Option<String>,
     pub voice: Option<String>,
+    pub proxy_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

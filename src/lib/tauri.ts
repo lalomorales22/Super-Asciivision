@@ -99,6 +99,10 @@ export const api = {
   createMediaCategory: (input: NewMediaCategory) =>
     invoke<MediaCategory>("create_media_category", { input }),
   listMediaCategories: () => invoke<MediaCategory[]>("list_media_categories"),
+  renameMediaCategory: (categoryId: string, name: string) =>
+    invoke<void>("rename_media_category", { categoryId, name }),
+  deleteMediaCategory: (categoryId: string) =>
+    invoke<void>("delete_media_category", { categoryId }),
   listMediaAssets: (categoryId?: string) =>
     invoke<MediaAsset[]>("list_media_assets", { categoryId }),
   importLocalMedia: (input: ImportLocalMediaRequest) =>

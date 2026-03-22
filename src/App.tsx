@@ -33,6 +33,7 @@ import {
   Pencil,
   Pin,
   Play,
+  Plus,
   RefreshCcw,
   Repeat,
   Repeat1,
@@ -50,6 +51,7 @@ import {
   VolumeX,
   WandSparkles,
   Wifi,
+  X,
 } from "lucide-react";
 import hljs from "highlight.js/lib/core";
 import hljsBash from "highlight.js/lib/languages/bash";
@@ -689,6 +691,7 @@ function GrokShell() {
   const toggleSettings = useAppStore((state) => state.toggleSettings);
   const openBrowserPreviewInStore = useAppStore((state) => state.openBrowserPreview);
   const [page, setPage] = useState<AppPage>("chat");
+  const [uiZoom, setUiZoom] = useState(100);
   const [asciivisionActive, setAsciivisionActive] = useState(false);
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>("workspace");
@@ -754,6 +757,23 @@ function GrokShell() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && !event.altKey && (event.key === "=" || event.key === "+")) {
+        event.preventDefault();
+        setUiZoom((z) => Math.min(z + 10, 150));
+        return;
+      }
+      if (mod && !event.altKey && event.key === "-") {
+        event.preventDefault();
+        setUiZoom((z) => Math.max(z - 10, 60));
+        return;
+      }
+      if (mod && !event.altKey && event.key === "0") {
+        event.preventDefault();
+        setUiZoom(100);
+        return;
+      }
+
       if (isEditableTarget(event.target)) {
         return;
       }
@@ -807,7 +827,10 @@ function GrokShell() {
 
   return (
     <ShellChromeContext.Provider value={chromeActions}>
-      <main className="h-[calc(100vh-8px)] w-full bg-transparent p-1">
+      <main
+        className="h-[calc(100vh-8px)] w-full bg-transparent p-1"
+        style={uiZoom !== 100 ? { zoom: `${uiZoom}%` } : undefined}
+      >
         <div
           className={clsx(
             "relative grid h-full min-h-0 overflow-hidden rounded-[34px] border border-white/[0.05] shadow-[0_32px_120px_rgba(0,0,0,0.72)]",
@@ -955,6 +978,16 @@ function GrokShell() {
                 <TerminalPanel />
               </div>
             </>
+          ) : null}
+          {uiZoom !== 100 ? (
+            <button
+              type="button"
+              onClick={() => setUiZoom(100)}
+              className="absolute bottom-3 right-3 z-50 rounded-full border border-white/10 bg-black/70 px-2.5 py-1 font-['IBM_Plex_Mono'] text-[10px] text-stone-300 shadow-lg backdrop-blur-md transition hover:bg-white/10"
+              title="Click to reset zoom (Cmd+0)"
+            >
+              {uiZoom}%
+            </button>
           ) : null}
         </div>
       </main>
@@ -1748,7 +1781,7 @@ function MessageBubble({ message }: { message: Message }) {
             {isAssistant ? "Assistant" : "You"}
           </p>
           <p className="mt-1 font-['IBM_Plex_Mono'] text-[10px] text-stone-400">
-            {message.modelId ?? "local"} · {message.status}
+            {message.modelId ?? "local"} · {message.status === "streaming" ? "Generating…" : message.status}
           </p>
         </div>
         {message.usage ? (
@@ -1780,6 +1813,7 @@ function MessageBubble({ message }: { message: Message }) {
           >
             {message.content || "…"}
           </ReactMarkdown>
+          {!message.content && message.status === "streaming" ? <TypingIndicator /> : null}
         </div>
       ) : (
         <p className="whitespace-pre-wrap text-[12px] leading-6">{message.content}</p>
@@ -1787,6 +1821,16 @@ function MessageBubble({ message }: { message: Message }) {
 
       {message.error ? <p className="mt-3 text-[10px] text-rose-200">{message.error}</p> : null}
     </article>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+      <span className="typing-dot" />
+    </span>
   );
 }
 
@@ -1962,6 +2006,8 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const generatingImage = useAppStore((state) => state.generatingImage);
   const generatingVideo = useAppStore((state) => state.generatingVideo);
   const createMediaCategory = useAppStore((state) => state.createMediaCategory);
+  const renameMediaCategory = useAppStore((state) => state.renameMediaCategory);
+  const deleteMediaCategory = useAppStore((state) => state.deleteMediaCategory);
   const generateImage = useAppStore((state) => state.generateImage);
   const generateVideo = useAppStore((state) => state.generateVideo);
   const ensureMediaLoaded = useAppStore((state) => state.ensureMediaLoaded);
@@ -1978,6 +2024,15 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [selectedVisualCategoryId, setSelectedVisualCategoryId] = useState<string>();
   const [galleryDensity, setGalleryDensity] = useState<4 | 5 | 6>(5);
+  const [catMenu, setCatMenu] = useState<{ id: string; name: string; x: number; y: number }>();
+  const [catRename, setCatRename] = useState<{ id: string; draft: string }>();
+
+  useEffect(() => {
+    if (!catMenu) return undefined;
+    const dismiss = () => setCatMenu(undefined);
+    window.addEventListener("pointerdown", dismiss);
+    return () => window.removeEventListener("pointerdown", dismiss);
+  }, [catMenu]);
 
   useEffect(() => { void ensureMediaLoaded(); }, [ensureMediaLoaded]);
 
@@ -1998,15 +2053,19 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
       ),
     [mediaAssets, selectedVisualCategoryId],
   );
+  const visualCategories = useMemo(
+    () => mediaCategories.filter((c) => !c.kind || c.kind === "visual"),
+    [mediaCategories],
+  );
   const visualCategoryCounts = useMemo(
     () =>
       Object.fromEntries(
-        mediaCategories.map((category) => [
+        visualCategories.map((category) => [
           category.id,
           mediaAssets.filter((asset) => asset.kind !== "audio" && asset.categoryId === category.id).length,
         ]),
       ),
-    [mediaAssets, mediaCategories],
+    [mediaAssets, visualCategories],
   );
   const visualAllCount = useMemo(
     () => mediaAssets.filter((asset) => asset.kind !== "audio").length,
@@ -2121,6 +2180,26 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                   </button>
                 ))}
               </div>
+              {mode === "image" && !ollamaImageAvailable && (
+                <div className="mt-2 rounded-xl border border-orange-300/12 bg-orange-300/5 px-3 py-2.5">
+                  <p className="text-[10px] font-medium text-orange-200/80">Local image generation requires Ollama</p>
+                  <p className="mt-1 text-[10px] leading-4 text-stone-500">
+                    {!ollamaReady
+                      ? "Ollama is not running. Start it first, then pull the models:"
+                      : "Ollama is running but the models need to be downloaded:"}
+                  </p>
+                  <div className="mt-2 space-y-1">
+                    {!ollamaReady && (
+                      <code className="block rounded-lg bg-black/40 px-2 py-1 font-['IBM_Plex_Mono'] text-[9px] text-stone-400">ollama serve</code>
+                    )}
+                    {OLLAMA_IMAGE_MODELS.map((modelId) => (
+                      <code key={modelId} className="block rounded-lg bg-black/40 px-2 py-1 font-['IBM_Plex_Mono'] text-[9px] text-stone-400">
+                        ollama pull {modelId}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {mode === "image" && !imageModel.startsWith("x/") ? (
@@ -2234,7 +2313,7 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                   if (event.key === "Enter") {
                     event.preventDefault();
                     if (newCategoryName.trim()) {
-                      void createMediaCategory(newCategoryName.trim());
+                      void createMediaCategory(newCategoryName.trim(), "visual");
                       setNewCategoryName("");
                     }
                   }
@@ -2246,7 +2325,7 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                 type="button"
                 onClick={() => {
                   if (newCategoryName.trim()) {
-                    void createMediaCategory(newCategoryName.trim());
+                    void createMediaCategory(newCategoryName.trim(), "visual");
                     setNewCategoryName("");
                   }
                 }}
@@ -2269,11 +2348,15 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                 <span className="block truncate">All visuals</span>
                 <span className="mt-1 block text-[10px] text-stone-500">{visualAllCount} items</span>
               </button>
-              {mediaCategories.map((category) => (
+              {visualCategories.map((category) => (
                 <button
                   key={category.id}
                   type="button"
                   onClick={() => setSelectedVisualCategoryId(category.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setCatMenu({ id: category.id, name: category.name, x: e.clientX, y: e.clientY });
+                  }}
                   className={clsx(
                     "rounded-[14px] border px-3 py-2 text-left text-[11px] transition",
                     category.id === selectedVisualCategoryId
@@ -2308,6 +2391,59 @@ function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
           </div>
         </section>
       </div>
+      {catMenu ? (
+        <div
+          className="fixed z-50 w-40 rounded-[18px] border border-white/8 bg-[#0b0c0d] p-1.5 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
+          style={{ left: Math.min(catMenu.x, window.innerWidth - 172), top: Math.min(catMenu.y, window.innerHeight - 100) }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => { setCatRename({ id: catMenu.id, draft: catMenu.name }); setCatMenu(undefined); }}
+            className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[11px] text-stone-200 transition hover:bg-white/7"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            Rename
+          </button>
+          <button
+            type="button"
+            onClick={() => { void deleteMediaCategory(catMenu.id); setCatMenu(undefined); if (selectedVisualCategoryId === catMenu.id) setSelectedVisualCategoryId(undefined); }}
+            className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[11px] text-rose-100 transition hover:bg-rose-500/15"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </button>
+        </div>
+      ) : null}
+      {catRename ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onPointerDown={() => setCatRename(undefined)}>
+          <div className="w-full max-w-sm rounded-[24px] border border-white/10 bg-[#0b0c0d] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.5)]" onPointerDown={(e) => e.stopPropagation()}>
+            <p className="text-[10px] uppercase tracking-[0.28em] text-[#84a09b]">Rename Category</p>
+            <input
+              autoFocus
+              value={catRename.draft}
+              onChange={(e) => setCatRename({ ...catRename, draft: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && catRename.draft.trim()) { void renameMediaCategory(catRename.id, catRename.draft.trim()); setCatRename(undefined); }
+                if (e.key === "Escape") setCatRename(undefined);
+              }}
+              className="mt-3 w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2.5 text-[12px] text-stone-100 outline-none placeholder:text-stone-600 focus:border-emerald-300/35"
+              placeholder="Category name"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button type="button" onClick={() => setCatRename(undefined)} className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-300 transition hover:bg-white/10">Cancel</button>
+              <button
+                type="button"
+                onClick={() => { if (catRename.draft.trim()) { void renameMediaCategory(catRename.id, catRename.draft.trim()); setCatRename(undefined); } }}
+                disabled={!catRename.draft.trim()}
+                className="rounded-xl border border-emerald-300/20 bg-emerald-300/12 px-3 py-2 text-[10px] font-semibold text-emerald-50 transition hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/5 disabled:text-stone-500"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2627,6 +2763,8 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const mediaCategories = useAppStore((state) => state.mediaCategories);
   const mediaAssets = useAppStore((state) => state.mediaAssets);
   const createMediaCategory = useAppStore((state) => state.createMediaCategory);
+  const renameMediaCategory = useAppStore((state) => state.renameMediaCategory);
+  const deleteMediaCategory = useAppStore((state) => state.deleteMediaCategory);
   const generatingSpeech = useAppStore((state) => state.generatingSpeech);
   const createRealtimeSession = useAppStore((state) => state.createRealtimeSession);
   const clearRealtimeSession = useAppStore((state) => state.clearRealtimeSession);
@@ -2642,14 +2780,29 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const [newCategoryName, setNewCategoryName] = useState("");
   const [selectedAudioCategoryId, setSelectedAudioCategoryId] = useState<string>();
   const [galleryDensity, setGalleryDensity] = useState<4 | 5 | 6>(6);
+  const [catMenu, setCatMenu] = useState<{ id: string; name: string; x: number; y: number }>();
+  const [catRename, setCatRename] = useState<{ id: string; draft: string }>();
+
+  useEffect(() => {
+    if (!catMenu) return undefined;
+    const dismiss = () => setCatMenu(undefined);
+    window.addEventListener("pointerdown", dismiss);
+    return () => window.removeEventListener("pointerdown", dismiss);
+  }, [catMenu]);
   const [voiceName, setVoiceName] = useState(normalizeVoiceId(settings?.xaiVoiceName));
   const [ttsModel, setTtsModel] = useState(settings?.xaiTtsModel ?? "xai-tts");
-  const [realtimeModel, setRealtimeModel] = useState(settings?.xaiRealtimeModel ?? "grok-realtime");
+  const [realtimeModel, setRealtimeModel] = useState(settings?.xaiRealtimeModel ?? "grok-3-mini-fast");
   const [realtimeInstructions, setRealtimeInstructions] = useState(
     "You are the voice assistant inside Super ASCIIVision. Keep responses concise and useful.",
   );
   const [realtimeStatus, setRealtimeStatus] = useState("Idle");
   const [voiceActive, setVoiceActive] = useState(false);
+  const [realtimeTalkMode, setRealtimeTalkMode] = useState<"push" | "auto">("push");
+  const [pushing, setPushing] = useState(false);
+  const talkModeRef = useRef(realtimeTalkMode);
+  talkModeRef.current = realtimeTalkMode;
+  const pushingRef = useRef(pushing);
+  pushingRef.current = pushing;
   const websocketRef = useRef<WebSocket | null>(null);
   const captureContextRef = useRef<AudioContext | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
@@ -2679,15 +2832,19 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
       ),
     [mediaAssets, selectedAudioCategoryId],
   );
+  const audioCategories = useMemo(
+    () => mediaCategories.filter((c) => !c.kind || c.kind === "audio"),
+    [mediaCategories],
+  );
   const audioCategoryCounts = useMemo(
     () =>
       Object.fromEntries(
-        mediaCategories.map((category) => [
+        audioCategories.map((category) => [
           category.id,
           mediaAssets.filter((asset) => asset.kind === "audio" && asset.categoryId === category.id).length,
         ]),
       ),
-    [mediaAssets, mediaCategories],
+    [mediaAssets, audioCategories],
   );
   const audioAllCount = useMemo(() => mediaAssets.filter((asset) => asset.kind === "audio").length, [mediaAssets]);
 
@@ -2750,6 +2907,26 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
     playbackCursorRef.current = startAt + buffer.duration;
   };
 
+  const beginPushToTalk = () => {
+    if (!websocketRef.current || websocketRef.current.readyState !== WebSocket.OPEN) return;
+    pushingRef.current = true;
+    setPushing(true);
+    setRealtimeStatus("Listening");
+    websocketRef.current.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+  };
+
+  const endPushToTalk = () => {
+    if (!pushingRef.current) return;
+    pushingRef.current = false;
+    setPushing(false);
+    setRealtimeStatus("Thinking");
+    const ws = websocketRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      ws.send(JSON.stringify({ type: "response.create" }));
+    }
+  };
+
   const startRealtimeConversation = async () => {
     if (voiceActive || generatingRealtimeSession) {
       return;
@@ -2765,22 +2942,30 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
         throw new Error("Realtime session was not created.");
       }
 
-      const socket = new WebSocket(session.websocketUrl, [`xai-client-secret.${session.clientSecret}`]);
+      // Connect via local WebSocket proxy (handles xAI auth headers server-side)
+      const socket = session.proxyPort
+        ? new WebSocket(`ws://127.0.0.1:${session.proxyPort}/ws`)
+        : new WebSocket(session.websocketUrl, [`openai-insecure-api-key.${session.clientSecret}`]);
       websocketRef.current = socket;
 
       socket.onopen = async () => {
-        setRealtimeStatus("Listening");
+        setRealtimeStatus(talkModeRef.current === "push" ? "Hold mic to talk" : "Listening");
+        const sessionConfig: Record<string, unknown> = {
+          modalities: ["text", "audio"],
+          instructions: realtimeInstructions,
+          voice: normalizeVoiceId(voiceName),
+          input_audio_format: "pcm16",
+          output_audio_format: "pcm16",
+        };
+        if (talkModeRef.current === "auto") {
+          sessionConfig.turn_detection = { type: "server_vad" };
+        } else {
+          sessionConfig.turn_detection = null;
+        }
         socket.send(
           JSON.stringify({
             type: "session.update",
-            session: {
-              modalities: ["text", "audio"],
-              instructions: realtimeInstructions,
-              voice: normalizeVoiceId(voiceName),
-              turn_detection: { type: "server_vad" },
-              input_audio_format: "pcm16",
-              output_audio_format: "pcm16",
-            },
+            session: sessionConfig,
           }),
         );
 
@@ -2810,6 +2995,10 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
           if (socket.readyState !== WebSocket.OPEN) {
             return;
           }
+          // In push-to-talk mode, only send audio while the button is held
+          if (talkModeRef.current === "push" && !pushingRef.current) {
+            return;
+          }
           const channelData = event.inputBuffer.getChannelData(0);
           socket.send(
             JSON.stringify({
@@ -2835,7 +3024,7 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
 
         const type = typeof data.type === "string" ? data.type : "";
         if (type === "session.updated") {
-          setRealtimeStatus("Listening");
+          setRealtimeStatus(talkModeRef.current === "push" ? "Hold mic to talk" : "Listening");
           return;
         }
         if (type === "input_audio_buffer.speech_started") {
@@ -2867,7 +3056,7 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
           return;
         }
         if (type === "response.done") {
-          setRealtimeStatus("Listening");
+          setRealtimeStatus(talkModeRef.current === "push" ? "Hold mic to talk" : "Listening");
           return;
         }
         if (type === "error") {
@@ -2968,17 +3157,23 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
               placeholder={mode === "speech" ? "TTS model id" : "Realtime model id"}
               className="rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-200 outline-none focus:border-sky-300/40"
             />
-            <select
-              value={normalizeVoiceId(voiceName)}
-              onChange={(event) => setVoiceName(event.target.value)}
-              className="rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-200 outline-none focus:border-sky-300/40"
-            >
+            <div className="flex flex-wrap gap-1.5">
               {XAI_VOICE_OPTIONS.map((voice) => (
-                <option key={voice.id} value={voice.id}>
+                <button
+                  key={voice.id}
+                  type="button"
+                  onClick={() => setVoiceName(voice.id)}
+                  className={clsx(
+                    "rounded-xl border px-3 py-1.5 text-[10px] transition",
+                    normalizeVoiceId(voiceName) === voice.id
+                      ? "border-sky-300/20 bg-sky-300/12 text-sky-50"
+                      : "border-white/8 bg-white/5 text-stone-300 hover:bg-white/8",
+                  )}
+                >
                   {voice.label}
-                </option>
+                </button>
               ))}
-            </select>
+            </div>
 
             {mode === "speech" ? (
               <>
@@ -3018,37 +3213,93 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
                   placeholder="Realtime instructions"
                   className="min-h-24 rounded-[18px] border border-white/8 bg-black/30 px-3 py-3 text-[11px] leading-5 text-stone-100 outline-none placeholder:text-stone-600 focus:border-emerald-300/30"
                 />
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRealtimeTalkMode("push")}
+                    className={clsx(
+                      "rounded-xl border px-3 py-1.5 text-[10px] transition",
+                      realtimeTalkMode === "push"
+                        ? "border-sky-300/20 bg-sky-300/12 text-sky-50"
+                        : "border-white/8 bg-white/5 text-stone-400 hover:bg-white/8",
+                    )}
+                  >
+                    Push to Talk
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRealtimeTalkMode("auto")}
+                    className={clsx(
+                      "rounded-xl border px-3 py-1.5 text-[10px] transition",
+                      realtimeTalkMode === "auto"
+                        ? "border-emerald-300/20 bg-emerald-300/12 text-emerald-50"
+                        : "border-white/8 bg-white/5 text-stone-400 hover:bg-white/8",
+                    )}
+                  >
+                    Auto (back & forth)
+                  </button>
+                </div>
+
                 <div className="rounded-[22px] border border-white/8 bg-black/30 px-4 py-5">
                   <div className="flex flex-col items-center text-center">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (voiceActive) {
-                          void stopRealtimeConversation();
-                        } else {
-                          void startRealtimeConversation();
-                        }
-                      }}
-                      disabled={generatingRealtimeSession}
-                      className={clsx(
-                        "flex h-28 w-28 items-center justify-center rounded-full border transition",
-                        voiceActive
-                          ? "border-rose-300/30 bg-rose-400/15 text-rose-50 shadow-[0_0_0_10px_rgba(251,113,133,0.08)]"
-                          : "border-sky-300/24 bg-sky-300/12 text-sky-50 shadow-[0_0_0_10px_rgba(56,189,248,0.08)] hover:bg-sky-300/18",
-                      )}
-                    >
-                      <Mic className="h-9 w-9" />
-                    </button>
+                    {!voiceActive ? (
+                      <button
+                        type="button"
+                        onClick={() => void startRealtimeConversation()}
+                        disabled={generatingRealtimeSession}
+                        className="flex h-28 w-28 items-center justify-center rounded-full border border-sky-300/24 bg-sky-300/12 text-sky-50 shadow-[0_0_0_10px_rgba(56,189,248,0.08)] transition hover:bg-sky-300/18"
+                      >
+                        <Mic className="h-9 w-9" />
+                      </button>
+                    ) : realtimeTalkMode === "push" ? (
+                      <button
+                        type="button"
+                        onPointerDown={(e) => { e.preventDefault(); beginPushToTalk(); }}
+                        onPointerUp={() => endPushToTalk()}
+                        onPointerLeave={() => { if (pushing) endPushToTalk(); }}
+                        className={clsx(
+                          "flex h-28 w-28 select-none items-center justify-center rounded-full border transition",
+                          pushing
+                            ? "animate-pulse border-emerald-300/30 bg-emerald-400/20 text-emerald-50 shadow-[0_0_0_14px_rgba(52,211,153,0.12)]"
+                            : "border-sky-300/24 bg-sky-300/12 text-sky-50 shadow-[0_0_0_10px_rgba(56,189,248,0.08)]",
+                        )}
+                      >
+                        <Mic className="h-9 w-9" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void stopRealtimeConversation()}
+                        className="animate-pulse flex h-28 w-28 items-center justify-center rounded-full border border-rose-300/30 bg-rose-400/15 text-rose-50 shadow-[0_0_0_10px_rgba(251,113,133,0.12)] transition"
+                      >
+                        <Square className="h-8 w-8" />
+                      </button>
+                    )}
                     <p className="mt-4 text-[12px] font-semibold text-stone-100">
-                      {voiceActive ? "Tap to end live voice" : "Tap to start live voice"}
+                      {!voiceActive
+                        ? "Tap to connect"
+                        : realtimeTalkMode === "push"
+                          ? pushing ? "Release to send" : "Hold to talk"
+                          : "Tap to disconnect"}
                     </p>
-                    <p className="mt-1 text-[11px] text-stone-500">
-                      {generatingRealtimeSession ? "Creating secure session…" : `Status: ${realtimeStatus}`}
+                    <p className={clsx(
+                      "mt-1 text-[11px]",
+                      realtimeStatus === "Listening" || realtimeStatus === "Hold mic to talk" ? "text-emerald-300" :
+                      realtimeStatus === "Responding" ? "text-sky-300" :
+                      realtimeStatus === "Thinking" ? "text-amber-300" :
+                      realtimeStatus.includes("error") || realtimeStatus.includes("Error") || realtimeStatus.includes("Disconnected") ? "text-rose-300" :
+                      "text-stone-500",
+                    )}>
+                      {generatingRealtimeSession ? "Creating secure session…" : realtimeStatus}
                     </p>
-                    {realtimeSession?.expiresAt ? (
-                      <p className="mt-1 font-['IBM_Plex_Mono'] text-[10px] text-stone-600">
-                        expires {realtimeSession.expiresAt}
-                      </p>
+                    {voiceActive ? (
+                      <button
+                        type="button"
+                        onClick={() => void stopRealtimeConversation()}
+                        className="mt-3 rounded-xl border border-white/8 bg-white/5 px-3 py-1.5 text-[10px] text-rose-200 transition hover:bg-rose-500/15"
+                      >
+                        Disconnect
+                      </button>
                     ) : null}
                   </div>
                 </div>
@@ -3085,7 +3336,7 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && newCategoryName.trim()) {
                       event.preventDefault();
-                      void createMediaCategory(newCategoryName.trim());
+                      void createMediaCategory(newCategoryName.trim(), "audio");
                       setNewCategoryName("");
                     }
                   }}
@@ -3096,7 +3347,7 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
                   type="button"
                   onClick={() => {
                     if (newCategoryName.trim()) {
-                      void createMediaCategory(newCategoryName.trim());
+                      void createMediaCategory(newCategoryName.trim(), "audio");
                       setNewCategoryName("");
                     }
                   }}
@@ -3119,11 +3370,15 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
                   <span className="block truncate">All audio</span>
                   <span className="mt-1 block text-[10px] text-stone-500">{audioAllCount} items</span>
                 </button>
-                {mediaCategories.map((category) => (
+                {audioCategories.map((category) => (
                   <button
                     key={category.id}
                     type="button"
                     onClick={() => setSelectedAudioCategoryId(category.id)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setCatMenu({ id: category.id, name: category.name, x: e.clientX, y: e.clientY });
+                    }}
                     className={clsx(
                       "rounded-[14px] border px-3 py-2 text-left text-[11px] transition",
                       category.id === selectedAudioCategoryId
@@ -3173,6 +3428,59 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
           </div>
         </section>
       </div>
+      {catMenu ? (
+        <div
+          className="fixed z-50 w-40 rounded-[18px] border border-white/8 bg-[#0b0c0d] p-1.5 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
+          style={{ left: Math.min(catMenu.x, window.innerWidth - 172), top: Math.min(catMenu.y, window.innerHeight - 100) }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => { setCatRename({ id: catMenu.id, draft: catMenu.name }); setCatMenu(undefined); }}
+            className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[11px] text-stone-200 transition hover:bg-white/7"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            Rename
+          </button>
+          <button
+            type="button"
+            onClick={() => { void deleteMediaCategory(catMenu.id); setCatMenu(undefined); if (selectedAudioCategoryId === catMenu.id) setSelectedAudioCategoryId(undefined); }}
+            className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[11px] text-rose-100 transition hover:bg-rose-500/15"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete
+          </button>
+        </div>
+      ) : null}
+      {catRename ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4" onPointerDown={() => setCatRename(undefined)}>
+          <div className="w-full max-w-sm rounded-[24px] border border-white/10 bg-[#0b0c0d] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.5)]" onPointerDown={(e) => e.stopPropagation()}>
+            <p className="text-[10px] uppercase tracking-[0.28em] text-[#84a09b]">Rename Category</p>
+            <input
+              autoFocus
+              value={catRename.draft}
+              onChange={(e) => setCatRename({ ...catRename, draft: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && catRename.draft.trim()) { void renameMediaCategory(catRename.id, catRename.draft.trim()); setCatRename(undefined); }
+                if (e.key === "Escape") setCatRename(undefined);
+              }}
+              className="mt-3 w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2.5 text-[12px] text-stone-100 outline-none placeholder:text-stone-600 focus:border-emerald-300/35"
+              placeholder="Category name"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button type="button" onClick={() => setCatRename(undefined)} className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-300 transition hover:bg-white/10">Cancel</button>
+              <button
+                type="button"
+                onClick={() => { if (catRename.draft.trim()) { void renameMediaCategory(catRename.id, catRename.draft.trim()); setCatRename(undefined); } }}
+                disabled={!catRename.draft.trim()}
+                className="rounded-xl border border-emerald-300/20 bg-emerald-300/12 px-3 py-2 text-[10px] font-semibold text-emerald-50 transition hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/5 disabled:text-stone-500"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -4020,9 +4328,9 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                           <p className="text-[9px] uppercase tracking-[0.2em] text-stone-400">
                             {message.role === "assistant" ? assistantModel : "You"}
                           </p>
-                          <p className="text-[9px] text-stone-500">{message.status}</p>
+                          <p className="text-[9px] text-stone-500">{message.status === "streaming" ? "Generating…" : message.status}</p>
                         </div>
-                        <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5">{message.content || "…"}</p>
+                        <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5">{message.content || (message.status === "streaming" ? <TypingIndicator /> : "…")}</p>
                         {message.role === "assistant" && message.content ? (
                           <button
                             type="button"
@@ -4836,23 +5144,23 @@ function WorkspaceDrawer({ page }: { page: AppPage }) {
   const workspaceItemsMap = useAppStore((state) => state.workspaceItems);
   const workspaceSelection = useAppStore((state) => state.workspaceSelection);
   const scanningWorkspaceId = useAppStore((state) => state.scanningWorkspaceId);
-  const createWorkspaceFromFolder = useAppStore((state) => state.createWorkspaceFromFolder);
-  const createWorkspaceFromFiles = useAppStore((state) => state.createWorkspaceFromFiles);
-  const replaceWorkspaceFromFolder = useAppStore((state) => state.replaceWorkspaceFromFolder);
-  const replaceWorkspaceFromFiles = useAppStore((state) => state.replaceWorkspaceFromFiles);
+  const addFilesToWorkspace = useAppStore((state) => state.addFilesToWorkspace);
+  const removeWorkspaceFile = useAppStore((state) => state.removeWorkspaceFile);
   const deleteWorkspace = useAppStore((state) => state.deleteWorkspace);
-  const selectWorkspace = useAppStore((state) => state.selectWorkspace);
   const scanWorkspace = useAppStore((state) => state.scanWorkspace);
   const toggleWorkspaceItem = useAppStore((state) => state.toggleWorkspaceItem);
   const importLocalMediaAsset = useAppStore((state) => state.importLocalMediaAsset);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
   const workspaceItems = activeWorkspaceId ? workspaceItemsMap[activeWorkspaceId] ?? [] : [];
-  const [workspaceMedia, setWorkspaceMedia] = useState<WorkspaceMediaFile[]>([]);
-  const [workspaceMediaLoading, setWorkspaceMediaLoading] = useState(false);
+  const [, setWorkspaceMedia] = useState<WorkspaceMediaFile[]>([]);
+  const [, setWorkspaceMediaLoading] = useState(false);
   const [importingPath, setImportingPath] = useState<string>();
+  const [dragOver, setDragOver] = useState(false);
+  const [stagedFiles, setStagedFiles] = useState<{ path: string; name: string }[]>([]);
   const workspaceMediaKinds =
     page === "voice" ? ["audio"] : page === "imagine" ? ["image", "video"] : ["image", "video", "audio"];
   const isTextWorkspace = page === "chat" || page === "ide";
+  const isMediaWorkspace = page === "imagine" || page === "voice" || page === "editor";
 
   useEffect(() => {
     if (isTextWorkspace || !activeWorkspaceId) {
@@ -4885,11 +5193,44 @@ function WorkspaceDrawer({ page }: { page: AppPage }) {
     };
   }, [activeWorkspace?.lastScannedAt, activeWorkspace?.roots, activeWorkspaceId, isTextWorkspace, page]);
 
+  useEffect(() => {
+    const currentWindow = getCurrentWindow();
+    const unlisten = currentWindow.onDragDropEvent((event) => {
+      if (event.payload.type === "over") {
+        setDragOver(true);
+      } else if (event.payload.type === "drop") {
+        setDragOver(false);
+        const paths = (event.payload as { type: string; paths: string[] }).paths;
+        if (paths?.length) {
+          if (isMediaWorkspace) {
+            setStagedFiles((prev) => {
+              const existing = new Set(prev.map((f) => f.path));
+              const next = [...prev];
+              for (const p of paths) {
+                if (!existing.has(p)) {
+                  next.push({ path: p, name: p.split("/").pop() ?? p });
+                }
+              }
+              return next;
+            });
+          } else {
+            void addFilesToWorkspace(paths);
+          }
+        }
+      } else {
+        setDragOver(false);
+      }
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [addFilesToWorkspace, importLocalMediaAsset, isMediaWorkspace]);
+
   const workspaceHeading =
     page === "imagine"
-      ? "Workspace Media"
+      ? "Import Media"
       : page === "voice"
-        ? "Workspace Audio"
+        ? "Import Audio"
         : page === "ide"
           ? "Workspace"
         : page === "editor"
@@ -4897,14 +5238,39 @@ function WorkspaceDrawer({ page }: { page: AppPage }) {
           : "Workspace";
   const workspaceBody =
     page === "imagine"
-      ? "Browse local image and video files from the active workspace and send them straight into the editor."
+      ? "Drop images or videos here to add them to your gallery, or use the + button."
       : page === "voice"
-        ? "Browse local audio files from the active workspace and queue them into the editor."
+        ? "Drop audio files here to add them to your gallery, or use the + button."
         : page === "ide"
           ? "Select or rescan a workspace here, then use the IDE page to browse and edit its indexed text files."
         : page === "editor"
           ? "Pull image, video, and audio files from the active workspace into the media editor."
-          : "Index local folders or files as prompt context.";
+          : "Drop files or folders to add as prompt context.";
+
+  const handleAddFiles = async () => {
+    const selection = await openDialog({ directory: false, multiple: true });
+    const paths =
+      typeof selection === "string"
+        ? [selection]
+        : Array.isArray(selection)
+          ? selection.filter((value): value is string => typeof value === "string")
+          : [];
+    if (!paths.length) return;
+    if (isMediaWorkspace) {
+      setStagedFiles((prev) => {
+        const existing = new Set(prev.map((f) => f.path));
+        const next = [...prev];
+        for (const p of paths) {
+          if (!existing.has(p)) {
+            next.push({ path: p, name: p.split("/").pop() ?? p });
+          }
+        }
+        return next;
+      });
+    } else {
+      void addFilesToWorkspace(paths);
+    }
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -4916,158 +5282,151 @@ function WorkspaceDrawer({ page }: { page: AppPage }) {
           </div>
           <button
             type="button"
-            onClick={() => void createWorkspaceFromFolder()}
+            onClick={() => void handleAddFiles()}
             className="rounded-xl border border-white/8 bg-white/5 p-2 text-stone-200 transition hover:bg-white/10"
-            aria-label="Add folder"
+            aria-label="Add files"
           >
-            <FolderPlus className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="mt-3 flex gap-2">
-          <button
-            type="button"
-            onClick={() => void createWorkspaceFromFolder()}
-            className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-stone-200 transition hover:bg-white/10"
-          >
-            Folder
-          </button>
-          <button
-            type="button"
-            onClick={() => void createWorkspaceFromFiles()}
-            className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-stone-200 transition hover:bg-white/10"
-          >
-            Files
+            <Plus className="h-4 w-4" />
           </button>
         </div>
       </div>
 
-      <div className="border-b border-white/6 px-4 py-3">
-        <div className="flex flex-wrap gap-2">
-          {workspaces.map((workspace) => (
-            <button
-              key={workspace.id}
-              type="button"
-              onClick={() => void selectWorkspace(workspace.id)}
-              className={clsx(
-                "rounded-full border px-3 py-1.5 text-[10px] transition",
-                workspace.id === activeWorkspaceId
-                  ? "border-sky-200/16 bg-sky-300/10 text-sky-100"
-                  : "border-white/8 bg-white/4 text-stone-300 hover:bg-white/8",
-              )}
-            >
-              {workspace.name}
-            </button>
-          ))}
-        </div>
-        {activeWorkspaceId ? (
-          <div className="mt-3 flex flex-wrap gap-2">
+      {activeWorkspaceId && isTextWorkspace ? (
+        <div className="flex items-center justify-between border-b border-white/6 px-4 py-2">
+          <p className="truncate text-[10px] text-stone-400">{activeWorkspace?.name ?? "Workspace"}</p>
+          <div className="flex items-center gap-1">
             <button
               type="button"
               onClick={() => void scanWorkspace(activeWorkspaceId)}
-              className="flex items-center gap-2 rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-stone-200 transition hover:bg-white/10"
+              className="rounded-lg p-1.5 text-stone-400 transition hover:bg-white/8 hover:text-stone-200"
+              aria-label="Rescan"
             >
               <RefreshCcw className={clsx("h-3.5 w-3.5", scanningWorkspaceId === activeWorkspaceId && "animate-spin")} />
-              Rescan
             </button>
             <button
               type="button"
-              onClick={() => void replaceWorkspaceFromFolder(activeWorkspaceId)}
-              className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-stone-200 transition hover:bg-white/10"
+              onClick={() => void deleteWorkspace(activeWorkspaceId)}
+              className="rounded-lg p-1.5 text-stone-400 transition hover:bg-rose-500/15 hover:text-rose-200"
+              aria-label="Remove workspace"
             >
-              Replace folder
-            </button>
-            <button
-              type="button"
-              onClick={() => void replaceWorkspaceFromFiles(activeWorkspaceId)}
-              className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-stone-200 transition hover:bg-white/10"
-            >
-              Replace files
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (window.confirm(`Remove workspace "${activeWorkspace?.name ?? "Workspace"}"?`)) {
-                  void deleteWorkspace(activeWorkspaceId);
-                }
-              }}
-              className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-rose-200 transition hover:bg-rose-500/15"
-            >
-              Remove
+              <Trash2 className="h-3.5 w-3.5" />
             </button>
           </div>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       <div className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
-        {isTextWorkspace ? workspaceItems.length ? (
-          workspaceItems.map((item) => (
-            <WorkspaceItemRow
-              key={item.id}
-              item={item}
-              selected={workspaceSelection[item.id] ?? false}
-              onToggle={() => toggleWorkspaceItem(item.id)}
-            />
-          ))
-        ) : (
-          <EmptyPanel
-            eyebrow="No workspace"
-            title="Attach a folder or selected files."
-            body="Supported text files are indexed locally and can be included in each prompt."
-          />
-        ) : !activeWorkspaceId ? (
-          <EmptyPanel
-            eyebrow="No workspace"
-            title="Attach a folder or selected files."
-            body="Pick a workspace first, then this panel will surface local media files that match the current page."
-          />
-        ) : workspaceMediaLoading ? (
-          <div className="rounded-[18px] border border-white/8 bg-white/[0.03] px-3 py-4 text-[11px] text-stone-400">
-            Loading workspace media…
-          </div>
-        ) : workspaceMedia.length ? (
-          workspaceMedia.map((item) => (
-            <button
-              key={item.path}
-              type="button"
-              onClick={() => {
-                setImportingPath(item.path);
-                importLocalMediaAsset(item.path, undefined, item.fileName.replace(/\.[^.]+$/, "")).then((asset) => {
-                  if (asset) {
-                    chrome?.openEditorAsset(asset);
-                  }
-                  setImportingPath((current) => (current === item.path ? undefined : current));
-                });
-              }}
-              className="w-full rounded-[18px] border border-white/8 bg-white/[0.03] px-3 py-3 text-left transition hover:bg-white/[0.06]"
+        {isMediaWorkspace ? (
+          <>
+            <div
+              className={clsx(
+                "flex flex-col items-center justify-center rounded-[18px] border-2 border-dashed px-4 py-8 text-center transition",
+                dragOver
+                  ? "border-emerald-400/40 bg-emerald-400/8"
+                  : "border-white/10 bg-white/[0.02]",
+              )}
             >
-              <div className="flex items-start justify-between gap-3">
+              {page === "voice"
+                ? <AudioLines className={clsx("mb-2 h-6 w-6", dragOver ? "text-emerald-300" : "text-stone-500")} />
+                : <ImagePlus className={clsx("mb-2 h-6 w-6", dragOver ? "text-emerald-300" : "text-stone-500")} />
+              }
+              <p className={clsx("text-[11px]", dragOver ? "text-emerald-200" : "text-stone-400")}>
+                {dragOver
+                  ? "Drop to add"
+                  : page === "voice"
+                    ? "Drop audio files here"
+                    : "Drop images or videos here"}
+              </p>
+              <p className="mt-1 text-[10px] text-stone-600">or use the + button above</p>
+            </div>
+            {stagedFiles.map((file) => (
+              <div
+                key={file.path}
+                className="group w-full rounded-[18px] border border-white/8 bg-white/[0.03] px-3 py-3 text-left transition hover:bg-white/[0.06]"
+              >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="rounded-full border border-white/8 bg-white/5 px-2 py-0.5 font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.18em] text-stone-400">
-                      {item.kind}
+                      {file.name.split(".").pop() ?? "file"}
                     </span>
-                    <span className="text-[9px] text-stone-500">{formatFileSize(item.fileSize)}</span>
                   </div>
-                  <p className="mt-2 truncate text-[11px] font-medium text-stone-100">{item.fileName}</p>
-                  <p className="mt-1 truncate font-['IBM_Plex_Mono'] text-[10px] text-stone-500">{item.path}</p>
+                  <p className="mt-2 truncate text-[11px] font-medium text-stone-100">{file.name}</p>
+                  <p className="mt-1 truncate font-['IBM_Plex_Mono'] text-[10px] text-stone-600">{file.path}</p>
                 </div>
-                <span className="rounded-xl border border-amber-300/18 bg-amber-300/10 px-2 py-1 text-[10px] text-amber-50">
-                  {importingPath === item.path ? "Adding…" : "Add to Editor"}
-                </span>
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportingPath(file.path);
+                      importLocalMediaAsset(file.path, undefined, file.name.replace(/\.[^.]+$/, "")).then(() => {
+                        setStagedFiles((prev) => prev.filter((f) => f.path !== file.path));
+                        setImportingPath((c) => (c === file.path ? undefined : c));
+                      });
+                    }}
+                    className="rounded-xl border border-emerald-300/18 bg-emerald-300/10 px-2.5 py-1 text-[10px] text-emerald-50 transition hover:bg-emerald-300/18"
+                  >
+                    {importingPath === file.path ? "Adding…" : page === "voice" ? "Add to Audio Gallery" : "Add to Gallery"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportingPath(file.path);
+                      importLocalMediaAsset(file.path, undefined, file.name.replace(/\.[^.]+$/, "")).then((asset) => {
+                        if (asset) chrome?.openEditorAsset(asset);
+                        setStagedFiles((prev) => prev.filter((f) => f.path !== file.path));
+                        setImportingPath((c) => (c === file.path ? undefined : c));
+                      });
+                    }}
+                    className="rounded-xl border border-amber-300/18 bg-amber-300/10 px-2.5 py-1 text-[10px] text-amber-50 transition hover:bg-amber-300/18"
+                  >
+                    Add to Editor
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStagedFiles((prev) => prev.filter((f) => f.path !== file.path))}
+                    className="rounded-xl border border-white/8 bg-white/5 px-2.5 py-1 text-[10px] text-rose-200 transition hover:bg-rose-500/15"
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
-            </button>
-          ))
+            ))}
+          </>
+        ) : isTextWorkspace ? (
+          <>
+            <div
+              className={clsx(
+                "flex flex-col items-center justify-center rounded-[18px] border-2 border-dashed px-4 py-6 text-center transition",
+                dragOver
+                  ? "border-emerald-400/40 bg-emerald-400/8"
+                  : "border-white/10 bg-white/[0.02]",
+              )}
+            >
+              <Files className={clsx("mb-2 h-6 w-6", dragOver ? "text-emerald-300" : "text-stone-500")} />
+              <p className={clsx("text-[11px]", dragOver ? "text-emerald-200" : "text-stone-400")}>
+                {dragOver ? "Drop to add files" : "Drop files here"}
+              </p>
+              <p className="mt-1 text-[10px] text-stone-600">or use the + button above</p>
+            </div>
+            {workspaceItems.length ? (
+              workspaceItems.map((item) => (
+                <WorkspaceItemRow
+                  key={item.id}
+                  item={item}
+                  selected={workspaceSelection[item.id] ?? false}
+                  onToggle={() => toggleWorkspaceItem(item.id)}
+                  onRemove={() => void removeWorkspaceFile(item.path)}
+                />
+              ))
+            ) : !activeWorkspaceId ? null : (
+              <p className="text-center text-[10px] text-stone-600">No indexed files yet.</p>
+            )}
+          </>
         ) : (
           <EmptyPanel
-            eyebrow="No local media"
-            title="No matching files in this workspace."
-            body={
-              page === "voice"
-                ? "This workspace does not currently expose any audio files."
-                : page === "imagine"
-                  ? "This workspace does not currently expose any image or video files."
-                  : "This workspace does not currently expose any importable media files."
-            }
+            eyebrow="No workspace"
+            title="Drop files or folders to get started."
+            body="Pick a workspace first, then this panel will surface local media files that match the current page."
           />
         )}
       </div>
@@ -5079,31 +5438,41 @@ function WorkspaceItemRow({
   item,
   selected,
   onToggle,
+  onRemove,
 }: {
   item: WorkspaceItem;
   selected: boolean;
   onToggle: () => void;
+  onRemove: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
+    <div
       className={clsx(
-        "w-full rounded-[18px] border px-3 py-3 text-left transition",
+        "group w-full rounded-[18px] border px-3 py-3 text-left transition",
         selected ? "border-emerald-200/16 bg-emerald-300/8" : "border-white/8 bg-white/[0.03] hover:bg-white/[0.06]",
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <button type="button" onClick={onToggle} className="min-w-0 flex-1 text-left">
           <p className="truncate text-[11px] text-stone-100">{leafName(item.path)}</p>
           <p className="mt-1 truncate font-['IBM_Plex_Mono'] text-[10px] text-stone-600">{item.path}</p>
-        </div>
-        <div className="text-right text-[10px] text-stone-500">
-          <p>{Math.round(item.byteSize / 1024)} KB</p>
-          <p>{item.chunkCount} chunks</p>
+        </button>
+        <div className="flex items-center gap-2">
+          <div className="text-right text-[10px] text-stone-500">
+            <p>{Math.round(item.byteSize / 1024)} KB</p>
+            <p>{item.chunkCount} chunks</p>
+          </div>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onRemove(); }}
+            className="rounded-lg p-1 text-stone-600 opacity-0 transition group-hover:opacity-100 hover:bg-rose-500/15 hover:text-rose-300"
+            aria-label="Remove file"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -5310,7 +5679,7 @@ function EditorPage({
                   onChange={(event) => setExportCategoryId(event.target.value)}
                   className="w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none focus:border-amber-300/35"
                 >
-                  <option value="">Unsorted export</option>
+                  <option value="">Auto-categorize</option>
                   {mediaCategories.map((category) => (
                     <option key={category.id} value={category.id}>
                       {category.name}

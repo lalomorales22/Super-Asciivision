@@ -117,6 +117,8 @@ interface AppState {
   deleteApiKey: (provider: ProviderId) => Promise<void>;
   createWorkspaceFromFolder: () => Promise<void>;
   createWorkspaceFromFiles: () => Promise<void>;
+  addFilesToWorkspace: (filePaths: string[]) => Promise<void>;
+  removeWorkspaceFile: (filePath: string) => Promise<void>;
   replaceWorkspaceFromFolder: (workspaceId: string) => Promise<void>;
   replaceWorkspaceFromFiles: (workspaceId: string) => Promise<void>;
   deleteWorkspace: (workspaceId: string) => Promise<void>;
@@ -130,7 +132,9 @@ interface AppState {
   setBrowserDraftUrl: (value: string) => void;
   openBrowserUrl: (value?: string) => void;
   openBrowserPreview: (html: string) => void;
-  createMediaCategory: (name: string) => Promise<void>;
+  createMediaCategory: (name: string, kind?: string) => Promise<void>;
+  renameMediaCategory: (categoryId: string, name: string) => Promise<void>;
+  deleteMediaCategory: (categoryId: string) => Promise<void>;
   importLocalMediaAsset: (filePath: string, categoryId?: string, prompt?: string) => Promise<MediaAsset | undefined>;
   moveMediaAssetToCategory: (assetId: string, categoryId?: string) => Promise<void>;
   renameMediaAsset: (assetId: string, prompt: string) => Promise<void>;
@@ -597,7 +601,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   loadConversation: async (conversationId) => {
     const detail = await api.loadConversation(conversationId);
-    set({ activeConversation: detail });
+    set({ activeConversation: detail, activeWorkspaceId: undefined, workspaceSelection: {} });
   },
 
   createConversation: async () => {
@@ -809,6 +813,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().scanWorkspace(workspace.id);
   },
 
+  addFilesToWorkspace: async (filePaths) => {
+    if (!filePaths.length) return;
+    const state = get();
+    if (state.activeWorkspaceId) {
+      const activeWorkspace = state.workspaces.find((ws) => ws.id === state.activeWorkspaceId);
+      if (activeWorkspace) {
+        const existingRoots = new Set(activeWorkspace.roots);
+        const newRoots = filePaths.filter((p) => !existingRoots.has(p));
+        if (!newRoots.length) return;
+        const mergedRoots = [...activeWorkspace.roots, ...newRoots];
+        await api.updateWorkspace(state.activeWorkspaceId, { roots: mergedRoots });
+        const workspaces = await api.listWorkspaces();
+        set({ workspaces });
+        await get().scanWorkspace(state.activeWorkspaceId);
+      }
+    } else {
+      const workspace = await api.createWorkspace({ roots: filePaths });
+      const workspaces = await api.listWorkspaces();
+      set({ workspaces, activeWorkspaceId: workspace.id });
+      await get().scanWorkspace(workspace.id);
+    }
+  },
+
+  removeWorkspaceFile: async (filePath) => {
+    const state = get();
+    if (!state.activeWorkspaceId) return;
+    const activeWorkspace = state.workspaces.find((ws) => ws.id === state.activeWorkspaceId);
+    if (!activeWorkspace) return;
+    const remainingRoots = activeWorkspace.roots.filter((r) => r !== filePath);
+    if (remainingRoots.length === 0) {
+      await get().deleteWorkspace(state.activeWorkspaceId);
+    } else {
+      await api.updateWorkspace(state.activeWorkspaceId, { roots: remainingRoots });
+      const workspaces = await api.listWorkspaces();
+      set({ workspaces });
+      await get().scanWorkspace(state.activeWorkspaceId);
+    }
+  },
+
   replaceWorkspaceFromFolder: async (workspaceId) => {
     const selection = await open({ directory: true, multiple: false });
     if (typeof selection !== "string") {
@@ -948,18 +991,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       browserDraftUrl: "preview://assistant-snippet",
     }),
 
-  createMediaCategory: async (name) => {
+  createMediaCategory: async (name, kind) => {
     const trimmed = name.trim();
     if (!trimmed) {
       return;
     }
     try {
-      const category = await api.createMediaCategory({ name: trimmed });
+      await api.createMediaCategory({ name: trimmed, kind: kind ?? null });
       await get().refreshMediaCategories();
-      await get().refreshMediaAssets(category.id);
+      await get().refreshMediaAssets();
     } catch (error) {
       set({ error: error instanceof Error ? error.message : "Category creation failed." });
     }
+  },
+
+  renameMediaCategory: async (categoryId, name) => {
+    await api.renameMediaCategory(categoryId, name);
+    await get().refreshMediaCategories();
+  },
+
+  deleteMediaCategory: async (categoryId) => {
+    await api.deleteMediaCategory(categoryId);
+    await get().refreshMediaCategories();
+    await get().refreshMediaAssets();
   },
 
   importLocalMediaAsset: async (filePath, categoryId, prompt) => {

@@ -195,11 +195,13 @@ export interface TerminalEvent {
 
 export interface NewMediaCategory {
   name: string;
+  kind?: string | null;
 }
 
 export interface MediaCategory {
   id: string;
   name: string;
+  kind?: string | null;
   createdAt: string;
   itemCount: number;
 }
@@ -266,6 +268,7 @@ export interface RealtimeSession {
   websocketUrl: string;
   modelId?: string | null;
   voice?: string | null;
+  proxyPort?: number | null;
 }
 
 export interface HandsConnection {

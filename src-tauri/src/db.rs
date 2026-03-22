@@ -144,6 +144,7 @@ impl Database {
             "pinned",
             "INTEGER NOT NULL DEFAULT 0",
         )?;
+        ensure_column(&conn, "media_categories", "kind", "TEXT")?;
         let defaults = Settings::default();
         conn.execute(
             r#"
@@ -169,6 +170,16 @@ impl Database {
                 defaults.hands_relay_desktop_token
             ],
         )?;
+        for (id, name) in [
+            ("default-media-editor", "Media Editor"),
+            ("default-image-video", "Image & Video"),
+            ("default-voice-audio", "Voice & Audio"),
+        ] {
+            conn.execute(
+                "INSERT OR IGNORE INTO media_categories (id, name, created_at) VALUES (?1, ?2, ?3)",
+                params![id, name, Utc::now().to_rfc3339()],
+            )?;
+        }
         Ok(())
     }
 
@@ -741,12 +752,13 @@ impl Database {
         let category = MediaCategory {
             id: uuid::Uuid::new_v4().to_string(),
             name: input.name.trim().to_string(),
+            kind: input.kind.clone(),
             created_at: Utc::now().to_rfc3339(),
             item_count: 0,
         };
         conn.execute(
-            "INSERT INTO media_categories (id, name, created_at) VALUES (?1, ?2, ?3)",
-            params![category.id, category.name, category.created_at],
+            "INSERT INTO media_categories (id, name, kind, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![category.id, category.name, category.kind, category.created_at],
         )?;
         Ok(category)
     }
@@ -755,7 +767,7 @@ impl Database {
         let conn = self.connect()?;
         let mut statement = conn.prepare(
             r#"
-            SELECT c.id, c.name, c.created_at,
+            SELECT c.id, c.name, c.kind, c.created_at,
               COALESCE((SELECT COUNT(*) FROM media_assets a WHERE a.category_id = c.id), 0)
             FROM media_categories c
             ORDER BY c.created_at DESC
@@ -765,8 +777,9 @@ impl Database {
             Ok(MediaCategory {
                 id: row.get(0)?,
                 name: row.get(1)?,
-                created_at: row.get(2)?,
-                item_count: row.get::<_, i64>(3)? as usize,
+                kind: row.get(2)?,
+                created_at: row.get(3)?,
+                item_count: row.get::<_, i64>(4)? as usize,
             })
         })?;
         Ok(rows.filter_map(Result::ok).collect())
@@ -882,6 +895,22 @@ impl Database {
             map_media_asset,
         )
         .map_err(Into::into)
+    }
+
+    pub fn rename_media_category(&self, category_id: &str, name: &str) -> AppResult<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE media_categories SET name = ?2 WHERE id = ?1",
+            params![category_id, name.trim()],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_media_category(&self, category_id: &str) -> AppResult<()> {
+        let conn = self.connect()?;
+        // Foreign key ON DELETE SET NULL handles orphaned assets
+        conn.execute("DELETE FROM media_categories WHERE id = ?1", [category_id])?;
+        Ok(())
     }
 
     pub fn delete_media_asset(&self, asset_id: &str) -> AppResult<()> {

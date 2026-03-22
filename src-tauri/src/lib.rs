@@ -5,6 +5,7 @@ mod error;
 mod hands;
 mod keychain;
 mod providers;
+mod realtime_proxy;
 mod terminal;
 mod tools;
 mod types;
@@ -48,6 +49,7 @@ struct AppState {
     streams: Mutex<std::collections::HashMap<String, CancellationToken>>,
     terminals: TerminalRegistry,
     hands: HandsService,
+    realtime_proxy: Mutex<Option<realtime_proxy::RealtimeProxy>>,
 }
 
 #[tauri::command]
@@ -373,6 +375,26 @@ fn list_media_categories(state: State<'_, AppState>) -> Result<Vec<MediaCategory
 }
 
 #[tauri::command]
+fn rename_media_category(
+    state: State<'_, AppState>,
+    category_id: String,
+    name: String,
+) -> Result<(), String> {
+    state
+        .db
+        .rename_media_category(&category_id, &name)
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
+fn delete_media_category(state: State<'_, AppState>, category_id: String) -> Result<(), String> {
+    state
+        .db
+        .delete_media_category(&category_id)
+        .map_err(to_command_error)
+}
+
+#[tauri::command]
 fn list_media_assets(
     state: State<'_, AppState>,
     category_id: Option<String>,
@@ -501,6 +523,23 @@ async fn export_editor_timeline_command(
     state: State<'_, AppState>,
     input: ExportEditorTimelineRequest,
 ) -> Result<MediaAsset, String> {
+    let mut input = input;
+
+    // Auto-categorize when no category is explicitly selected
+    if input.category_id.is_none() {
+        let has_visual = input.clips.iter().any(|c| c.kind != "audio");
+        let audio_only = !has_visual && input.clips.iter().any(|c| c.kind == "audio");
+
+        input.category_id = Some(
+            if audio_only {
+                "default-voice-audio"
+            } else {
+                "default-image-video"
+            }
+            .to_string(),
+        );
+    }
+
     let asset = editor::export_timeline(&input, &media_output_dir(&app, "exports"))
         .await
         .map_err(to_command_error)?;
@@ -516,11 +555,35 @@ async fn create_realtime_session_command(
     state: State<'_, AppState>,
     input: RealtimeSessionRequest,
 ) -> Result<RealtimeSession, String> {
-    state
+    let mut session = state
         .providers
         .create_realtime_session(&input)
         .await
-        .map_err(to_command_error)
+        .map_err(to_command_error)?;
+
+    // Stop any existing proxy
+    {
+        let mut guard = state.realtime_proxy.lock().unwrap();
+        if let Some(proxy) = guard.take() {
+            proxy.stop();
+        }
+    }
+
+    // Start a local WebSocket proxy so the browser can connect with proper auth headers
+    let proxy = realtime_proxy::RealtimeProxy::start(
+        session.websocket_url.clone(),
+        session.client_secret.clone(),
+    )
+    .await
+    .map_err(to_command_error)?;
+    session.proxy_port = Some(proxy.port);
+
+    {
+        let mut guard = state.realtime_proxy.lock().unwrap();
+        *guard = Some(proxy);
+    }
+
+    Ok(session)
 }
 
 #[tauri::command]
@@ -1666,6 +1729,7 @@ pub fn run() {
             streams: Mutex::new(std::collections::HashMap::new()),
             terminals: Mutex::new(std::collections::HashMap::new()),
             hands: HandsService::new(database.clone(), providers),
+            realtime_proxy: Mutex::new(None),
         })
         .setup(move |app| {
             configure_window(app)?;
@@ -1715,6 +1779,8 @@ pub fn run() {
             list_workspace_media,
             create_media_category,
             list_media_categories,
+            rename_media_category,
+            delete_media_category,
             list_media_assets,
             import_local_media_command,
             update_media_asset_category,
