@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
+use axum::extract::ws::{Message as WsFrame, WebSocket, WebSocketUpgrade};
 use base64::Engine;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::header::{self, HeaderMap, HeaderValue};
@@ -26,6 +27,8 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
+
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
@@ -65,6 +68,7 @@ struct HandsBridge {
     chat_history: Mutex<Vec<Message>>,
     workspace_dir: PathBuf,
     relay_sender: Mutex<Option<mpsc::UnboundedSender<String>>>,
+    relay_terminal: Mutex<Option<HandsTerminalSession>>,
 }
 
 #[derive(Clone)]
@@ -116,6 +120,12 @@ struct MobileAudioRequest {
 struct RelaySessionPayload {
     session_id: Option<String>,
     session_label: Option<String>,
+}
+
+struct HandsTerminalSession {
+    writer: std::sync::Mutex<Box<dyn Write + Send>>,
+    master: std::sync::Mutex<Box<dyn portable_pty::MasterPty + Send>>,
+    _child: std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
 }
 
 impl HandsService {
@@ -188,6 +198,7 @@ impl HandsService {
             chat_history: Mutex::new(Vec::new()),
             workspace_dir: workspace_dir.clone(),
             relay_sender: Mutex::new(None),
+            relay_terminal: Mutex::new(None),
         });
 
         bridge.emit_snapshot().await;
@@ -201,6 +212,7 @@ impl HandsService {
             .route("/api/generate/video", post(generate_video))
             .route("/api/generate/audio", post(generate_audio))
             .route("/api/assets/{asset_id}", get(download_asset))
+            .route("/api/terminal/ws", get(terminal_ws_handler))
             .with_state(bridge.clone());
 
         let shutdown = CancellationToken::new();
@@ -748,6 +760,134 @@ impl HandsBridge {
         })
     }
 
+    async fn open_relay_terminal(&self) {
+        self.close_relay_terminal().await;
+
+        let sender = match self.relay_sender.lock().await.clone() {
+            Some(sender) => sender,
+            None => return,
+        };
+
+        let pty_system = native_pty_system();
+        let pair = match pty_system.openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }) {
+            Ok(pair) => pair,
+            Err(_) => return,
+        };
+
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let home_dir = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+        let mut command = CommandBuilder::new(&shell);
+        command.arg("-l");
+        command.arg("-i");
+        command.cwd(&home_dir);
+        command.env("HOME", home_dir.to_string_lossy().to_string());
+        if let Ok(path) = std::env::var("PATH") {
+            command.env("PATH", path);
+        }
+        command.env("TERM", "xterm-256color");
+        command.env("CLICOLOR", "1");
+        command.env("COLORTERM", "truecolor");
+
+        let child = match pair.slave.spawn_command(command) {
+            Ok(child) => child,
+            Err(_) => return,
+        };
+        drop(pair.slave);
+
+        let master = pair.master;
+        let mut reader = match master.try_clone_reader() {
+            Ok(reader) => reader,
+            Err(_) => return,
+        };
+        let writer = match master.take_writer() {
+            Ok(writer) => writer,
+            Err(_) => return,
+        };
+
+        let session = HandsTerminalSession {
+            writer: std::sync::Mutex::new(writer),
+            master: std::sync::Mutex::new(master),
+            _child: std::sync::Mutex::new(child),
+        };
+        *self.relay_terminal.lock().await = Some(session);
+
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let data =
+                            base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
+                        let msg = json!({
+                            "type": "desktop.terminal.output",
+                            "data": data,
+                        })
+                        .to_string();
+                        if sender.send(msg).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        self.log_activity(
+            "terminal",
+            "Remote terminal opened",
+            "Phone connected to terminal via relay.",
+            "phone",
+            "complete",
+        )
+        .await;
+    }
+
+    async fn write_relay_terminal(&self, data_b64: &str) {
+        if let Some(ref session) = *self.relay_terminal.lock().await {
+            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data_b64) {
+                if let Ok(mut w) = session.writer.lock() {
+                    let _ = w.write_all(&bytes);
+                    let _ = w.flush();
+                }
+            }
+        }
+    }
+
+    async fn resize_relay_terminal(&self, cols: u16, rows: u16) {
+        if let Some(ref session) = *self.relay_terminal.lock().await {
+            if let Ok(m) = session.master.lock() {
+                let _ = m.resize(PtySize {
+                    rows: rows.max(1),
+                    cols: cols.max(1),
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
+        }
+    }
+
+    async fn close_relay_terminal(&self) {
+        if let Some(session) = self.relay_terminal.lock().await.take() {
+            if let Ok(mut c) = session._child.lock() {
+                let _ = c.kill();
+            }
+            self.log_activity(
+                "terminal",
+                "Remote terminal closed",
+                "Phone disconnected from terminal.",
+                "phone",
+                "complete",
+            )
+            .await;
+        }
+    }
+
     async fn download_asset_bytes(&self, asset_id: &str) -> AppResult<(Vec<u8>, String)> {
         let asset = {
             let snapshot = self.snapshot.lock().await;
@@ -992,6 +1132,26 @@ async fn spawn_relay_client(
                                     payload.get("payload").cloned().unwrap_or_else(|| json!({}));
                                 handle_relay_request(bridge.clone(), tx.clone(), request_id, action, request_payload)
                                     .await;
+                            }
+                            if message_type == "relay.terminal.open" {
+                                bridge.open_relay_terminal().await;
+                                continue;
+                            }
+                            if message_type == "relay.terminal.input" {
+                                if let Some(data) = payload.get("data").and_then(Value::as_str) {
+                                    bridge.write_relay_terminal(data).await;
+                                }
+                                continue;
+                            }
+                            if message_type == "relay.terminal.resize" {
+                                let cols = payload.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
+                                let rows = payload.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
+                                bridge.resize_relay_terminal(cols, rows).await;
+                                continue;
+                            }
+                            if message_type == "relay.terminal.close" {
+                                bridge.close_relay_terminal().await;
+                                continue;
                             }
                         }
                         Ok::<(), AppError>(())
@@ -1285,6 +1445,173 @@ async fn download_asset(
     }
 }
 
+async fn terminal_ws_handler(
+    State(bridge): State<Arc<HandsBridge>>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response<Body> {
+    if require_session(&bridge, &headers).await.is_err() {
+        return error_response(StatusCode::UNAUTHORIZED, "Pair this device first.");
+    }
+    ws.on_upgrade(move |socket| handle_terminal_ws(socket, bridge))
+        .into_response()
+}
+
+async fn handle_terminal_ws(socket: WebSocket, bridge: Arc<HandsBridge>) {
+    let pty_system = native_pty_system();
+    let pair = match pty_system.openpty(PtySize {
+        rows: 24,
+        cols: 80,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(pair) => pair,
+        Err(err) => {
+            error!("failed to open PTY for hands terminal: {err}");
+            return;
+        }
+    };
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let home_dir = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+    let mut command = CommandBuilder::new(&shell);
+    command.arg("-l");
+    command.arg("-i");
+    command.cwd(&home_dir);
+    command.env("HOME", home_dir.to_string_lossy().to_string());
+    if let Ok(path) = std::env::var("PATH") {
+        command.env("PATH", path);
+    }
+    command.env("TERM", "xterm-256color");
+    command.env("CLICOLOR", "1");
+    command.env("CLICOLOR_FORCE", "1");
+    command.env("COLORTERM", "truecolor");
+
+    let mut child = match pair.slave.spawn_command(command) {
+        Ok(child) => child,
+        Err(err) => {
+            error!("failed to spawn shell for hands terminal: {err}");
+            return;
+        }
+    };
+    drop(pair.slave);
+
+    let master = pair.master;
+    let mut reader = match master.try_clone_reader() {
+        Ok(reader) => reader,
+        Err(err) => {
+            error!("failed to clone PTY reader: {err}");
+            return;
+        }
+    };
+    let writer = match master.take_writer() {
+        Ok(writer) => writer,
+        Err(err) => {
+            error!("failed to take PTY writer: {err}");
+            return;
+        }
+    };
+
+    let writer = Arc::new(std::sync::Mutex::new(writer));
+    let master = Arc::new(std::sync::Mutex::new(master));
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if output_tx.blocking_send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    let send_task = tokio::spawn(async move {
+        while let Some(data) = output_rx.recv().await {
+            if ws_sender
+                .send(WsFrame::Binary(data.into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    bridge
+        .log_activity(
+            "terminal",
+            "Mobile terminal opened",
+            "Phone connected to a terminal session.",
+            "phone",
+            "complete",
+        )
+        .await;
+
+    while let Some(Ok(msg)) = ws_receiver.next().await {
+        match msg {
+            WsFrame::Text(ref text) => {
+                let s: &str = text;
+                if let Ok(cmd) = serde_json::from_str::<Value>(s) {
+                    match cmd.get("type").and_then(Value::as_str) {
+                        Some("input") => {
+                            if let Some(data) = cmd.get("data").and_then(Value::as_str) {
+                                if let Ok(mut w) = writer.lock() {
+                                    let _ = w.write_all(data.as_bytes());
+                                    let _ = w.flush();
+                                }
+                            }
+                        }
+                        Some("resize") => {
+                            let cols =
+                                cmd.get("cols").and_then(Value::as_u64).unwrap_or(80) as u16;
+                            let rows =
+                                cmd.get("rows").and_then(Value::as_u64).unwrap_or(24) as u16;
+                            if let Ok(m) = master.lock() {
+                                let _ = m.resize(PtySize {
+                                    rows: rows.max(1),
+                                    cols: cols.max(1),
+                                    pixel_width: 0,
+                                    pixel_height: 0,
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            WsFrame::Binary(ref data) => {
+                if let Ok(mut w) = writer.lock() {
+                    let _ = w.write_all(data);
+                    let _ = w.flush();
+                }
+            }
+            WsFrame::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    send_task.abort();
+    let _ = child.kill();
+
+    bridge
+        .log_activity(
+            "terminal",
+            "Mobile terminal closed",
+            "Phone disconnected from terminal session.",
+            "phone",
+            "complete",
+        )
+        .await;
+}
+
 async fn require_session(
     bridge: &HandsBridge,
     headers: &HeaderMap,
@@ -1434,7 +1761,7 @@ fn offline_snapshot(settings: &Settings) -> HandsStatus {
     }
 }
 
-const MOBILE_HTML: &str = r#"<!doctype html>
+const MOBILE_HTML: &str = r##"<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -1509,7 +1836,7 @@ const MOBILE_HTML: &str = r#"<!doctype html>
         font-size: 12px;
         color: #d7e6df;
       }
-      .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+      .tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
       .tab.active { border-color: rgba(127, 231, 181, 0.28); background: rgba(127, 231, 181, 0.12); }
       .messages, .assets { display: grid; gap: 10px; }
       .message, .asset {
@@ -1522,7 +1849,10 @@ const MOBILE_HTML: &str = r#"<!doctype html>
       .asset a { color: var(--accent); text-decoration: none; }
       .hidden { display: none !important; }
       .warning { color: var(--warn); }
+      #terminal-area { height: 320px; border-radius: 12px; overflow: hidden; background: #0a0d0f; }
+      #terminal-area .xterm { padding: 4px; }
     </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
   </head>
   <body>
     <main class="stack">
@@ -1555,13 +1885,15 @@ const MOBILE_HTML: &str = r#"<!doctype html>
             <button class="tab secondary" data-tab="image" type="button">Image</button>
             <button class="tab secondary" data-tab="video" type="button">Video</button>
             <button class="tab secondary" data-tab="audio" type="button">Audio</button>
+            <button class="tab secondary" data-tab="terminal" type="button">Term</button>
           </div>
 
-          <div class="row">
+          <div id="prompt-area" class="row">
             <textarea id="prompt" placeholder="Send a message or describe what to generate."></textarea>
             <div id="extra-fields" class="row"></div>
             <button id="submit" type="button">Send</button>
           </div>
+          <div id="terminal-area" class="hidden"></div>
         </div>
 
         <div class="panel stack">
@@ -1576,6 +1908,8 @@ const MOBILE_HTML: &str = r#"<!doctype html>
       </section>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script>
       const state = { mode: "chat", status: null };
       const pairPanel = document.getElementById("pair-panel");
@@ -1680,6 +2014,57 @@ const MOBILE_HTML: &str = r#"<!doctype html>
         }
       });
 
+      let term = null;
+      let termWs = null;
+      let fitAddon = null;
+
+      function connectTerminal() {
+        const container = document.getElementById("terminal-area");
+        container.classList.remove("hidden");
+        if (!term) {
+          term = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: '"SF Mono", "Menlo", "Courier New", monospace',
+            theme: { background: "#0a0d0f", foreground: "#f4f7f5", cursor: "#7fe7b5", selectionBackground: "rgba(127,231,181,0.3)" },
+          });
+          fitAddon = new FitAddon.FitAddon();
+          term.loadAddon(fitAddon);
+          term.open(container);
+          setTimeout(() => fitAddon.fit(), 50);
+          term.onData((data) => {
+            if (termWs && termWs.readyState === WebSocket.OPEN) {
+              termWs.send(JSON.stringify({ type: "input", data }));
+            }
+          });
+          window.addEventListener("resize", () => {
+            if (fitAddon && state.mode === "terminal") {
+              fitAddon.fit();
+              if (termWs && termWs.readyState === WebSocket.OPEN) {
+                termWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+              }
+            }
+          });
+        } else {
+          setTimeout(() => fitAddon.fit(), 50);
+        }
+        if (!termWs || termWs.readyState !== WebSocket.OPEN) {
+          const proto = location.protocol === "https:" ? "wss:" : "ws:";
+          termWs = new WebSocket(proto + "//" + location.host + "/api/terminal/ws");
+          termWs.binaryType = "arraybuffer";
+          termWs.onopen = () => {
+            termWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+          };
+          termWs.onmessage = (event) => {
+            if (event.data instanceof ArrayBuffer) {
+              term.write(new Uint8Array(event.data));
+            }
+          };
+          termWs.onclose = () => { termWs = null; };
+          termWs.onerror = () => { termWs = null; };
+        }
+      }
+
       document.querySelectorAll(".tab").forEach((button) => {
         button.addEventListener("click", () => {
           state.mode = button.dataset.tab;
@@ -1687,7 +2072,14 @@ const MOBILE_HTML: &str = r#"<!doctype html>
           document.querySelectorAll(".tab").forEach((tab) => tab.classList.add("secondary"));
           button.classList.add("active");
           button.classList.remove("secondary");
-          renderFields();
+          if (state.mode === "terminal") {
+            document.getElementById("prompt-area").classList.add("hidden");
+            connectTerminal();
+          } else {
+            document.getElementById("prompt-area").classList.remove("hidden");
+            document.getElementById("terminal-area").classList.add("hidden");
+            renderFields();
+          }
         });
       });
 
@@ -1734,4 +2126,4 @@ const MOBILE_HTML: &str = r#"<!doctype html>
     </script>
   </body>
 </html>
-"#;
+"##;

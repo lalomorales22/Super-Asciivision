@@ -20,6 +20,7 @@ function getMachine(machineId) {
       sessions: new Map(),
       pendingRequests: new Map(),
       lastSeenAt: undefined,
+      terminalSocket: undefined,
     };
     machines.set(machineId, machine);
   }
@@ -247,7 +248,9 @@ function mobileHtml(machineId) {
       }
       .secondary { background: rgba(255,255,255,0.04); border-color: var(--line); }
       .stack { display: grid; gap: 12px; }
-      .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+      .tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+      #terminal-area { height: 320px; border-radius: 12px; overflow: hidden; background: #0a0d0f; }
+      #terminal-area .xterm { padding: 4px; }
       .chips { display: flex; flex-wrap: wrap; gap: 8px; }
       .chip { border: 1px solid var(--line); border-radius: 999px; padding: 7px 11px; font-size: 12px; color: #d7e6df; background: rgba(255,255,255,0.02); }
       .item { border: 1px solid var(--line); border-radius: 16px; padding: 12px; background: rgba(255,255,255,0.025); }
@@ -255,6 +258,9 @@ function mobileHtml(machineId) {
       .hidden { display: none !important; }
       .warning { color: var(--warn); }
       .error { color: var(--error); }
+    </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <style>
       .hero {
         padding: 18px;
         border-radius: 24px;
@@ -304,10 +310,14 @@ function mobileHtml(machineId) {
             <button class="tab secondary" data-tab="image" type="button">Image</button>
             <button class="tab secondary" data-tab="video" type="button">Video</button>
             <button class="tab secondary" data-tab="audio" type="button">Audio</button>
+            <button class="tab secondary" data-tab="terminal" type="button">Term</button>
           </div>
+          <div id="prompt-area" class="stack">
           <textarea id="prompt" placeholder="Send a message or describe what to generate."></textarea>
           <div id="extra-fields" class="stack"></div>
           <button id="submit" type="button">Send</button>
+          </div>
+          <div id="terminal-area" class="hidden"></div>
         </div>
 
         <div class="panel stack">
@@ -322,6 +332,8 @@ function mobileHtml(machineId) {
       </section>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script>
       const machineId = ${JSON.stringify(machineId)};
       const apiBase = "/api";
@@ -448,6 +460,57 @@ function mobileHtml(machineId) {
         }
       });
 
+      let term = null;
+      let termWs = null;
+      let fitAddon = null;
+
+      function connectTerminal() {
+        const container = document.getElementById("terminal-area");
+        container.classList.remove("hidden");
+        if (!term) {
+          term = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: '"SF Mono", "Menlo", "Courier New", monospace',
+            theme: { background: "#0a0d0f", foreground: "#f4f7f5", cursor: "#89f0bb", selectionBackground: "rgba(137,240,187,0.3)" },
+          });
+          fitAddon = new FitAddon.FitAddon();
+          term.loadAddon(fitAddon);
+          term.open(container);
+          setTimeout(() => fitAddon.fit(), 50);
+          term.onData((data) => {
+            if (termWs && termWs.readyState === WebSocket.OPEN) {
+              termWs.send(JSON.stringify({ type: "input", data }));
+            }
+          });
+          window.addEventListener("resize", () => {
+            if (fitAddon && state.mode === "terminal") {
+              fitAddon.fit();
+              if (termWs && termWs.readyState === WebSocket.OPEN) {
+                termWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+              }
+            }
+          });
+        } else {
+          setTimeout(() => fitAddon.fit(), 50);
+        }
+        if (!termWs || termWs.readyState !== WebSocket.OPEN) {
+          const proto = location.protocol === "https:" ? "wss:" : "ws:";
+          termWs = new WebSocket(proto + "//" + location.host + "/ws/terminal/" + machineId);
+          termWs.binaryType = "arraybuffer";
+          termWs.onopen = () => {
+            termWs.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+          };
+          termWs.onmessage = (event) => {
+            if (event.data instanceof ArrayBuffer) {
+              term.write(new Uint8Array(event.data));
+            }
+          };
+          termWs.onclose = () => { termWs = null; };
+          termWs.onerror = () => { termWs = null; };
+        }
+      }
+
       document.querySelectorAll(".tab").forEach((button) => {
         button.addEventListener("click", () => {
           state.mode = button.dataset.tab;
@@ -455,7 +518,14 @@ function mobileHtml(machineId) {
           document.querySelectorAll(".tab").forEach((tab) => tab.classList.add("secondary"));
           button.classList.add("active");
           button.classList.remove("secondary");
-          renderFields();
+          if (state.mode === "terminal") {
+            document.getElementById("prompt-area").classList.add("hidden");
+            connectTerminal();
+          } else {
+            document.getElementById("prompt-area").classList.remove("hidden");
+            document.getElementById("terminal-area").classList.add("hidden");
+            renderFields();
+          }
         });
       });
 
@@ -524,6 +594,14 @@ function handleDesktopMessage(machine, raw) {
   if (message.type === "desktop.snapshot") {
     machine.snapshot = message.snapshot;
     machine.lastSeenAt = new Date().toISOString();
+    return;
+  }
+
+  if (message.type === "desktop.terminal.output" && message.data) {
+    if (machine.terminalSocket && machine.terminalSocket.readyState === machine.terminalSocket.OPEN) {
+      const bytes = Buffer.from(message.data, "base64");
+      machine.terminalSocket.send(bytes);
+    }
     return;
   }
 
@@ -662,15 +740,70 @@ const server = http.createServer(async (request, response) => {
 
 const wss = new WebSocketServer({ noServer: true });
 
+const termWss = new WebSocketServer({ noServer: true });
+
+termWss.on("connection", (socket, request, machine) => {
+  machine.terminalSocket = socket;
+
+  if (machine.socket && machine.socket.readyState === machine.socket.OPEN) {
+    machine.socket.send(JSON.stringify({ type: "relay.terminal.open" }));
+  }
+
+  socket.on("message", (raw, isBinary) => {
+    if (!machine.socket || machine.socket.readyState !== machine.socket.OPEN) return;
+    if (isBinary) {
+      const b64 = Buffer.from(raw).toString("base64");
+      machine.socket.send(JSON.stringify({ type: "relay.terminal.input", data: b64 }));
+    } else {
+      try {
+        const msg = JSON.parse(raw.toString("utf8"));
+        if (msg.type === "input") {
+          const b64 = Buffer.from(msg.data || "", "utf8").toString("base64");
+          machine.socket.send(JSON.stringify({ type: "relay.terminal.input", data: b64 }));
+        } else if (msg.type === "resize") {
+          machine.socket.send(JSON.stringify({ type: "relay.terminal.resize", cols: msg.cols, rows: msg.rows }));
+        }
+      } catch {}
+    }
+  });
+
+  socket.on("close", () => {
+    if (machine.terminalSocket === socket) {
+      machine.terminalSocket = undefined;
+    }
+    if (machine.socket && machine.socket.readyState === machine.socket.OPEN) {
+      machine.socket.send(JSON.stringify({ type: "relay.terminal.close" }));
+    }
+  });
+});
+
 server.on("upgrade", (request, socket, head) => {
   const url = new URL(request.url || "/", `http://${request.headers.host || `127.0.0.1:${port}`}`);
-  if (url.pathname !== "/ws/desktop") {
-    socket.destroy();
+
+  if (url.pathname === "/ws/desktop") {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit("connection", ws, request);
+    });
     return;
   }
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit("connection", ws, request);
-  });
+
+  const termMatch = url.pathname.match(/^\/ws\/terminal\/(.+)$/);
+  if (termMatch) {
+    const machineId = termMatch[1];
+    const cookies = parseCookies(request);
+    const sessionId = cookies[machineCookieName(machineId)];
+    const machine = machines.get(machineId);
+    if (!machine || !sessionId || !machine.sessions.has(sessionId)) {
+      socket.destroy();
+      return;
+    }
+    termWss.handleUpgrade(request, socket, head, (ws) => {
+      termWss.emit("connection", ws, request, machine);
+    });
+    return;
+  }
+
+  socket.destroy();
 });
 
 wss.on("connection", (socket, request) => {
