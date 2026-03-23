@@ -98,22 +98,16 @@ cargo build --release
 
 ### API Keys (Optional)
 
-Copy `.env.example` to `.env` in the repo root and fill in your keys:
+**When running inside Super ASCIIVision:** Open **Settings** in the desktop app and add your API keys (Claude, OpenAI, Gemini). Your xAI key is shared automatically. ASCIIVision picks them up at launch.
+
+**When running standalone:** Copy `.env.example` to `.env` and add your keys:
 
 ```bash
 cp .env.example .env
+# Edit .env with your API keys
 ```
 
-Then edit `.env`:
-
-```
-CLAUDE_API_KEY=sk-ant-...
-GROK_API_KEY=xai-...
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=AIza...
-```
-
-Only the providers you want to use need keys. The app works without any keys -- shell, video, webcam, effects, tiling, sysmon, and local Ollama routing all work standalone.
+Only the providers you want to use need keys. The app works without any keys — shell, video, webcam, effects, tiling, sysmon, and local Ollama routing all work standalone.
 
 ---
 

@@ -18,7 +18,7 @@ use base64::Engine;
 use db::Database;
 use error::AppError;
 use hands::HandsService;
-use keychain::{MigratingSecretStore, SecretStore};
+use keychain::{FileSecretStore, SecretStore};
 use providers::ProviderService;
 use tauri::{AppHandle, Emitter, Manager, State};
 use terminal::{
@@ -547,6 +547,19 @@ async fn export_editor_timeline_command(
         .db
         .insert_media_asset(&asset)
         .map_err(to_command_error)?;
+    Ok(asset)
+}
+
+#[tauri::command]
+async fn extract_audio_command(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    source_path: String,
+) -> Result<MediaAsset, String> {
+    let asset = editor::extract_audio(&source_path, &media_output_dir(&app, "audio"))
+        .await
+        .map_err(to_command_error)?;
+    state.db.insert_media_asset(&asset).map_err(to_command_error)?;
     Ok(asset)
 }
 
@@ -1228,6 +1241,15 @@ struct MusicTrack {
     album: Option<String>,
     duration_secs: Option<f64>,
     cover_art_data_url: Option<String>,
+    category: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MusicCategory {
+    name: String,
+    path: String,
+    track_count: usize,
 }
 
 #[tauri::command]
@@ -1238,15 +1260,7 @@ async fn list_music_files(folder_path: Option<String>) -> Result<Vec<MusicTrack>
 }
 
 fn list_music_files_sync(folder_path: Option<String>) -> Result<Vec<MusicTrack>, String> {
-    let music_dir = match folder_path {
-        Some(ref p) if !p.is_empty() => std::path::PathBuf::from(p),
-        _ => {
-            let mut default = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
-            default.push("Music");
-            default.push("SuperASCIIVision");
-            default
-        }
-    };
+    let music_dir = resolve_music_dir(folder_path.as_deref());
 
     if !music_dir.exists() {
         // Create the default music directory if it doesn't exist
@@ -1297,6 +1311,16 @@ fn list_music_files_sync(folder_path: Option<String>) -> Result<Vec<MusicTrack>,
         let (title, artist, album, duration_secs, cover_art_data_url) =
             read_music_metadata(path);
 
+        // Determine category from immediate subdirectory of music root
+        let category = path
+            .parent()
+            .and_then(|p| p.strip_prefix(&music_dir).ok())
+            .and_then(|rel| rel.components().next())
+            .and_then(|c| {
+                let name = c.as_os_str().to_string_lossy().to_string();
+                if name.is_empty() { None } else { Some(name) }
+            });
+
         tracks.push(MusicTrack {
             file_path: file_path_str,
             file_name: file_name.clone(),
@@ -1310,7 +1334,41 @@ fn list_music_files_sync(folder_path: Option<String>) -> Result<Vec<MusicTrack>,
             album,
             duration_secs,
             cover_art_data_url,
+            category,
         });
+    }
+
+    // Deduplicate: if a root file and a categorized symlink resolve to the same
+    // real file on disk, keep only the categorized entry so uncategorized counts
+    // stay accurate.
+    {
+        use std::collections::HashMap;
+        let mut canonical_map: HashMap<std::path::PathBuf, usize> = HashMap::new();
+        let mut remove_indices = Vec::new();
+
+        for (i, t) in tracks.iter().enumerate() {
+            let p = std::path::PathBuf::from(&t.file_path);
+            let real = std::fs::canonicalize(&p).unwrap_or(p);
+            if let Some(&existing_idx) = canonical_map.get(&real) {
+                // Duplicate found — prefer the one with a category
+                if t.category.is_some() && tracks[existing_idx].category.is_none() {
+                    // New entry is categorized, old is root — drop the old one
+                    remove_indices.push(existing_idx);
+                    canonical_map.insert(real, i);
+                } else {
+                    // Old entry is already categorized (or both same) — drop new
+                    remove_indices.push(i);
+                }
+            } else {
+                canonical_map.insert(real, i);
+            }
+        }
+
+        remove_indices.sort_unstable();
+        remove_indices.dedup();
+        for idx in remove_indices.into_iter().rev() {
+            tracks.swap_remove(idx);
+        }
     }
 
     tracks.sort_by(|a, b| {
@@ -1404,6 +1462,354 @@ fn reveal_music_folder(folder_path: String) -> Result<(), String> {
         let _ = std::process::Command::new("xdg-open").arg(&folder_path).spawn();
     }
     Ok(())
+}
+
+#[tauri::command]
+async fn list_music_categories(folder_path: Option<String>) -> Result<Vec<MusicCategory>, String> {
+    tokio::task::spawn_blocking(move || list_music_categories_sync(folder_path))
+        .await
+        .map_err(|e| format!("music categories task failed: {e}"))?
+}
+
+fn list_music_categories_sync(folder_path: Option<String>) -> Result<Vec<MusicCategory>, String> {
+    let music_dir = resolve_music_dir(folder_path.as_deref());
+    if !music_dir.exists() {
+        let _ = std::fs::create_dir_all(&music_dir);
+        return Ok(Vec::new());
+    }
+
+    let audio_extensions = ["mp3", "wav", "ogg", "flac", "m4a", "aac", "opus", "wma"];
+    let mut categories = Vec::new();
+
+    let entries = std::fs::read_dir(&music_dir).map_err(|e| format!("read dir failed: {e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) if !n.starts_with('.') => n.to_string(),
+            _ => continue,
+        };
+
+        // Count audio files in this subdirectory (recursive)
+        let mut count = 0usize;
+        for sub in walkdir::WalkDir::new(&path)
+            .follow_links(false)
+            .max_depth(4)
+            .into_iter()
+            .flatten()
+        {
+            if sub.path().is_file() {
+                let ext = sub
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if audio_extensions.contains(&ext.as_str()) {
+                    count += 1;
+                }
+            }
+        }
+
+        categories.push(MusicCategory {
+            name: name.clone(),
+            path: path.to_string_lossy().to_string(),
+            track_count: count,
+        });
+    }
+
+    categories.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(categories)
+}
+
+fn resolve_music_dir(folder_path: Option<&str>) -> std::path::PathBuf {
+    match folder_path {
+        Some(p) if !p.is_empty() => std::path::PathBuf::from(p),
+        _ => {
+            let mut default = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
+            default.push("Music");
+            default.push("SuperASCIIVision");
+            default
+        }
+    }
+}
+
+#[tauri::command]
+async fn create_music_category(
+    folder_path: Option<String>,
+    name: String,
+) -> Result<MusicCategory, String> {
+    // Sanitize: replace path separators so "slow/sad" becomes "slow-sad" (single folder)
+    let safe_name = name
+        .replace('/', "-")
+        .replace('\\', "-")
+        .trim()
+        .to_string();
+    if safe_name.is_empty() {
+        return Err("Category name cannot be empty".to_string());
+    }
+    let music_dir = resolve_music_dir(folder_path.as_deref());
+    let cat_path = music_dir.join(&safe_name);
+    if cat_path.exists() {
+        return Err(format!("Category '{}' already exists", safe_name));
+    }
+    std::fs::create_dir_all(&cat_path).map_err(|e| format!("create dir failed: {e}"))?;
+    Ok(MusicCategory {
+        name: safe_name,
+        path: cat_path.to_string_lossy().to_string(),
+        track_count: 0,
+    })
+}
+
+#[tauri::command]
+async fn delete_music_category(category_path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(&category_path);
+    if path.exists() && path.is_dir() {
+        std::fs::remove_dir_all(&path).map_err(|e| format!("delete dir failed: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn link_tracks_to_category(
+    track_paths: Vec<String>,
+    category_name: String,
+    folder_path: Option<String>,
+) -> Result<usize, String> {
+    let music_dir = resolve_music_dir(folder_path.as_deref());
+    let cat_dir = music_dir.join(&category_name);
+    if !cat_dir.exists() {
+        std::fs::create_dir_all(&cat_dir).map_err(|e| format!("create dir failed: {e}"))?;
+    }
+
+    let mut linked = 0usize;
+    for src_str in &track_paths {
+        let src = std::path::PathBuf::from(src_str);
+        if !src.is_file() {
+            continue;
+        }
+        if let Some(file_name) = src.file_name() {
+            let target = cat_dir.join(file_name);
+            if target.exists() {
+                // Already present in this category
+                linked += 1;
+                continue;
+            }
+
+            // Check if the source lives directly in the music root (uncategorized)
+            let src_parent = src.parent().map(|p| p.to_path_buf());
+            let in_root = src_parent.as_ref() == Some(&music_dir);
+
+            if in_root {
+                // Move the file into the category — removes it from uncategorized
+                if std::fs::rename(&src, &target).is_ok() {
+                    linked += 1;
+                } else if std::fs::copy(&src, &target).is_ok() {
+                    // rename can fail across filesystems; fall back to copy+delete
+                    let _ = std::fs::remove_file(&src);
+                    linked += 1;
+                }
+            } else {
+                // Already in another category — symlink to avoid duplication
+                let real_src = std::fs::canonicalize(&src).unwrap_or_else(|_| src.clone());
+                #[cfg(unix)]
+                {
+                    if std::os::unix::fs::symlink(&real_src, &target).is_ok() {
+                        linked += 1;
+                        continue;
+                    }
+                }
+                // Fallback: copy if symlink not available
+                if std::fs::copy(&real_src, &target).is_ok() {
+                    linked += 1;
+                }
+            }
+        }
+    }
+
+    Ok(linked)
+}
+
+#[tauri::command]
+async fn import_music_files(
+    file_paths: Vec<String>,
+    target_folder: Option<String>,
+    folder_path: Option<String>,
+) -> Result<usize, String> {
+    tokio::task::spawn_blocking(move || {
+        let music_dir = resolve_music_dir(folder_path.as_deref());
+        let dest = match target_folder {
+            Some(ref t) if !t.is_empty() => music_dir.join(t),
+            _ => music_dir,
+        };
+        if !dest.exists() {
+            std::fs::create_dir_all(&dest).map_err(|e| format!("create dir failed: {e}"))?;
+        }
+
+        let audio_extensions = ["mp3", "wav", "ogg", "flac", "m4a", "aac", "opus", "wma"];
+        let mut imported = 0usize;
+
+        for src_str in &file_paths {
+            let src = std::path::PathBuf::from(src_str);
+
+            if src.is_dir() {
+                // Recursively find audio files in directory and copy them
+                for entry in walkdir::WalkDir::new(&src)
+                    .follow_links(false)
+                    .max_depth(5)
+                    .into_iter()
+                    .flatten()
+                {
+                    let p = entry.path();
+                    if !p.is_file() {
+                        continue;
+                    }
+                    let ext = p
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if !audio_extensions.contains(&ext.as_str()) {
+                        continue;
+                    }
+                    if let Some(file_name) = p.file_name() {
+                        let target = dest.join(file_name);
+                        if target != p && std::fs::copy(p, &target).is_ok() {
+                            imported += 1;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if !src.is_file() {
+                continue;
+            }
+            let ext = src
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !audio_extensions.contains(&ext.as_str()) {
+                continue;
+            }
+            if let Some(file_name) = src.file_name() {
+                let target = dest.join(file_name);
+                if target == src {
+                    imported += 1;
+                    continue;
+                }
+                if std::fs::copy(&src, &target).is_ok() {
+                    imported += 1;
+                }
+            }
+        }
+
+        Ok(imported)
+    })
+    .await
+    .map_err(|e| format!("import task failed: {e}"))?
+}
+
+/// Resolve the asciivision-core/.env path relative to the project root.
+fn asciivision_env_path() -> std::path::PathBuf {
+    // Try CWD first (dev), then exe dir's parent (bundled app)
+    if let Ok(cwd) = std::env::current_dir() {
+        let candidate = cwd.join("asciivision-core").join(".env");
+        if candidate.parent().map(|p| p.exists()).unwrap_or(false) {
+            return candidate;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            // In a macOS bundle the exe is inside Contents/MacOS/
+            // Walk up to find asciivision-core
+            for ancestor in dir.ancestors().take(5) {
+                let candidate = ancestor.join("asciivision-core").join(".env");
+                if candidate.parent().map(|p| p.exists()).unwrap_or(false) {
+                    return candidate;
+                }
+            }
+        }
+    }
+    // Fallback — will be created if missing
+    std::path::PathBuf::from("asciivision-core/.env")
+}
+
+#[tauri::command]
+fn read_asciivision_env() -> Result<std::collections::HashMap<String, String>, String> {
+    let path = asciivision_env_path();
+    let mut map = std::collections::HashMap::new();
+    if !path.exists() {
+        return Ok(map);
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("read .env failed: {e}"))?;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            map.insert(key.trim().to_string(), value.trim().to_string());
+        }
+    }
+    Ok(map)
+}
+
+#[tauri::command]
+fn write_asciivision_env(
+    state: State<'_, AppState>,
+    keys: std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let path = asciivision_env_path();
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    // Auto-sync: pull the xAI key from the system keychain and write it as GROK_API_KEY
+    let mut merged = keys.clone();
+    if !merged.contains_key("GROK_API_KEY") || merged["GROK_API_KEY"].is_empty() {
+        if let Ok(Some(xai_key)) = state.providers.get_api_key(ProviderId::Xai) {
+            merged.insert("GROK_API_KEY".into(), xai_key);
+        }
+    }
+    let mut lines = Vec::new();
+    let known = ["CLAUDE_API_KEY", "GROK_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"];
+    for key_name in &known {
+        if let Some(value) = merged.get(*key_name) {
+            if !value.is_empty() {
+                lines.push(format!("{}={}", key_name, value));
+            }
+        }
+    }
+    // Preserve any extra keys from the existing file
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                if let Some((k, _)) = trimmed.split_once('=') {
+                    let k = k.trim();
+                    if !known.contains(&k) && !merged.contains_key(k) {
+                        lines.push(trimmed.to_string());
+                    } else if !known.contains(&k) {
+                        if let Some(v) = merged.get(k) {
+                            if !v.is_empty() {
+                                lines.push(format!("{}={}", k, v));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let content = lines.join("\n") + "\n";
+    std::fs::write(&path, content).map_err(|e| format!("write .env failed: {e}"))
 }
 
 fn validate_workspace_file_path(state: &AppState, file_path: &str) -> Result<(), String> {
@@ -1693,28 +2099,9 @@ pub fn run() {
     let database = Database::new(db_path);
     database.init().expect("database initialization failed");
 
-    let secrets: Arc<dyn SecretStore> = Arc::new(MigratingSecretStore::new(
+    let secrets: Arc<dyn SecretStore> = Arc::new(FileSecretStore::new(
         app_data_dir.join("secrets"),
-        "com.megabrain2.superasciivision",
     ));
-    // Migrate API keys from the old keychain service name
-    {
-        let old_service = "com.megabrain2.grokdesktop";
-        for provider in [types::ProviderId::Xai, types::ProviderId::Ollama] {
-            if secrets.has_api_key(provider).unwrap_or(false) {
-                continue; // already has a key under the new service
-            }
-            if let Ok(entry) = keyring::Entry::new(old_service, provider.as_str()) {
-                if let Ok(password) = entry.get_password() {
-                    if !password.trim().is_empty() {
-                        let _ = secrets.set_api_key(provider, password.trim());
-                        let _ = entry.delete_credential();
-                        info!("migrated {} API key from old keychain service", provider.as_str());
-                    }
-                }
-            }
-        }
-    }
     let providers = ProviderService::new(reqwest::Client::new(), secrets);
     let initial_settings = database.load_settings().expect("settings load failed");
 
@@ -1789,11 +2176,19 @@ pub fn run() {
             generate_image_command,
             generate_video_command,
             export_editor_timeline_command,
+            extract_audio_command,
             text_to_speech_command,
             create_realtime_session_command,
             list_music_files,
             get_default_music_folder,
-            reveal_music_folder
+            reveal_music_folder,
+            list_music_categories,
+            create_music_category,
+            delete_music_category,
+            link_tracks_to_category,
+            import_music_files,
+            read_asciivision_env,
+            write_asciivision_env
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

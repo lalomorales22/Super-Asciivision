@@ -30,6 +30,8 @@ export interface Settings {
   handsRelayUrl?: string | null;
   handsRelayMachineId?: string | null;
   handsRelayDesktopToken?: string | null;
+  ollamaModel?: string | null;
+  theme?: string | null;
 }
 
 export interface SettingsPatch {
@@ -47,6 +49,8 @@ export interface SettingsPatch {
   handsRelayUrl?: string;
   handsRelayMachineId?: string;
   handsRelayDesktopToken?: string;
+  ollamaModel?: string;
+  theme?: string;
 }
 
 export interface Conversation {
@@ -325,10 +329,20 @@ export interface EditorTimelineClip {
   stillDuration?: number | null;
 }
 
+export interface EditorOverlayClip {
+  filePath: string;
+  start: number;
+  end: number;
+  x: number; // percentage 0-100
+  y: number; // percentage 0-100
+  width: number; // percentage 0-100
+}
+
 export interface ExportEditorTimelineRequest {
   title?: string | null;
   categoryId?: string | null;
   clips: EditorTimelineClip[];
+  overlays?: EditorOverlayClip[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +372,13 @@ export interface MusicTrack {
   album?: string | null;
   durationSecs?: number | null;
   coverArtDataUrl?: string | null;
+  category?: string | null;
+}
+
+export interface MusicCategory {
+  name: string;
+  path: string;
+  trackCount: number;
 }
 
 export interface AgentEvent {

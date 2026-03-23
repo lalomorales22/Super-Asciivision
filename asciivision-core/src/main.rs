@@ -5,6 +5,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use rand::Rng;
 use ratatui::{
     prelude::*,
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
@@ -122,8 +123,109 @@ const SMALL_LOGO: &[&str] = &[
     "  ╚═╝  ╚═╝╚═════╝ ╚════╝╚═╝╚═╝   ╚═╝   ╚═╝╚═════╝╚═╝ ╚════╝ ╚═╝  ╚═╝",
 ];
 
-const SCROLLER_TEXT: &str =
-    " ASCIIVISION v2.0 // AI DEMOZONE // LIVE VIDEO CHAT // WEBCAM ASCII // 3D EFFECTS ENGINE // TRUE PTY TILES // !bash !curl !brew // F2 MODEL // F3 VIDEO // F4 FX CYCLE // F5 WEBCAM // F6 LAYOUT // F7 TILES // CTRL+L PURGE // THIS TERMINAL HAS LEFT THE BUILDING ";
+// Cute rotating sayings displayed in the bottom status bar
+const SAYINGS: &[&str] = &[
+    "Your code is valid and so are you",
+    "Compiling happiness...",
+    "This terminal believes in you",
+    "sudo make me a sandwich",
+    "git commit -m 'things are going well'",
+    "The bits are strong with this one",
+    "Have you tried turning it off and on again?",
+    "All your base are belong to us",
+    "There's no place like 127.0.0.1",
+    "It works on my machine",
+    "Hello from the other side of the stack",
+    "Keep calm and cargo build",
+    "May your merge conflicts be few",
+    "In Rust we trust",
+    "Segfaults are just surprise exits",
+    "Real programmers count from zero",
+    "This is the way // the terminal way",
+    "Beautiful code is its own documentation",
+    "Sleep is just a blocking call on consciousness",
+    "The cloud is just someone else's computer",
+    "Tabs vs spaces: the eternal debate",
+    "I'm not a bug, I'm an undocumented feature",
+    "Live long and prosper, little process",
+    "Every great program starts with a hello world",
+    "May your build times be short",
+    "The answer is always 42",
+    "Ctrl+Z: the real undo button for life",
+    "Powered by caffeine and curiosity",
+    "Another day, another deploy",
+    "One does not simply walk into production",
+    "404: sleep not found",
+    "This terminal runs on vibes",
+    "Be the commit you wish to see in the world",
+    "Recursion: see recursion",
+    "There are 10 types of people in the world",
+    "Your future self will thank you for these comments",
+    "Today's forecast: 100% chance of code",
+    "The best code is no code at all",
+    "Keep your friends close and your backups closer",
+    "chmod 777: living on the edge",
+    "Life is short, use --force wisely",
+    "Every pixel tells a story",
+    "When in doubt, console.log it out",
+    "The terminal never judges you",
+    "Machines don't dream yet but they're getting there",
+    "ASCII: because every character counts",
+    "Born to code, forced to debug",
+    "rm -rf doubts",
+    "You had me at 'Hello World'",
+    "Embrace the spaghetti, then refactor",
+    "A journey of a thousand lines begins with fn main",
+    "In a world of GUIs, be a terminal",
+    "The only constant is change... and pi",
+    "Loading awesomeness...",
+    "Your terminal, your rules",
+    "Pixels and possibilities, unlimited",
+    "Think different. Think in ASCII",
+    "Press any key to continue being awesome",
+    "Today's lucky number: 0xDEADBEEF",
+    "Trust the process (PID 1)",
+    "Less is more, except for RAM",
+    "Pipeline dreams and stream machines",
+    "The void* stares back",
+    "Making the impossible merely improbable",
+    "Do androids dream of electric sheep?",
+    "Syntax errors build character",
+    "Keep shipping, keep smiling",
+    "You are the captain of this terminal now",
+    "Adventure awaits beyond the prompt",
+    "No legacy is so rich as honesty and clean code",
+    "There is no spoon, only pointers",
+    "Imagine all the pixels, living in harmony",
+    "The cake is a lie, but the build is real",
+    "Float on, little bits",
+    "Runtime is just compile time that believed in itself",
+    "Some call it hacking, we call it creativity",
+    "Stack overflow: the website, not the error",
+    "May your packets never drop",
+    "Insert quarter to continue",
+    "Level up: terminal operator",
+    "The matrix has you (but in a friendly way)",
+    "Escape velocity: press Esc twice",
+    "This moment is brought to you by open source",
+    "Type with purpose, delete with confidence",
+    "Every frame tells a thousand bytes",
+    "Rock on, terminal warrior",
+    "End of line. Just kidding, there's always another",
+    "Brought to you by the letter 0x41",
+    "The universe is written in mathematics and Rust",
+    "Signal acquired. Vibes are nominal",
+    "Keep your hashes strong and your latency low",
+    "A clean build is a happy build",
+    "Dream in code, wake up in production",
+    "This terminal approves of your choices",
+    "Zero bugs found (so far...)",
+    "Welcome to the other side of the screen",
+    "May your uptime be eternal",
+    "The best time to refactor was yesterday",
+    "Error 200: everything is actually fine",
+    "Running on pure determination and electrons",
+];
 
 #[derive(Parser, Debug)]
 #[command(
@@ -277,7 +379,7 @@ struct App {
     pending_ai: bool,
     pending_shells: usize,
     session_id: u64,
-    recent_commands: VecDeque<String>,
+    recent_ops: VecDeque<String>,
     last_shell_status: String,
     events_tx: mpsc::UnboundedSender<AppEvent>,
     events_rx: mpsc::UnboundedReceiver<AppEvent>,
@@ -312,6 +414,13 @@ struct App {
     pinned_messages: Vec<usize>,
     shell_output_history: VecDeque<String>,
     prev_mode: AppMode,
+
+    // Sayings banner
+    current_saying: usize,
+    saying_changed: Instant,
+
+    // Help overlay scroll
+    help_scroll: usize,
 }
 
 impl ChatMessage {
@@ -454,7 +563,7 @@ impl App {
             pending_ai: false,
             pending_shells: 0,
             session_id: 0,
-            recent_commands: VecDeque::new(),
+            recent_ops: VecDeque::new(),
             last_shell_status: "shell bus idle".to_string(),
             events_tx,
             events_rx,
@@ -490,6 +599,9 @@ impl App {
             } else {
                 AppMode::Intro
             },
+            current_saying: rand::thread_rng().gen_range(0..SAYINGS.len()),
+            saying_changed: Instant::now(),
+            help_scroll: 0,
         };
 
         app.add_system_message(
@@ -516,7 +628,7 @@ impl App {
             "tiles online: /tiles or F7 boots live PTY terminals // /tiles 4 for a 2x2 shell grid"
         );
         app.add_system_message(
-            "tiling: Ctrl+hjkl focus, Ctrl+Shift+hjkl swap, Ctrl+[/] resize, Ctrl+n cycle panel, /layout cycle preset"
+            "tiling: Ctrl+WASD focus, Ctrl+Shift+WASD swap, Ctrl+[/] resize, Ctrl+n cycle panel, /layout cycle preset"
         );
 
         if app.video.is_none() {
@@ -615,6 +727,7 @@ impl App {
     fn set_provider(&mut self, provider: AIProvider, route: &str) {
         self.session_id = self.session_id.wrapping_add(1);
         self.pending_ai = false;
+        self.record_op(format!("provider -> {}", provider.name()));
         self.provider = provider;
         if self.provider == AIProvider::Ollama {
             self.prepare_ollama_provider(route);
@@ -1111,6 +1224,12 @@ impl App {
         let elapsed = now.saturating_duration_since(self.last_tick);
         self.last_tick = now;
         self.games.tick(elapsed.as_secs_f32());
+
+        // Rotate saying every 45 seconds
+        if self.saying_changed.elapsed() > Duration::from_secs(45) {
+            self.rotate_saying();
+        }
+
         let tick_factor = ((elapsed.as_secs_f32() / 0.016).ceil() as usize).max(1);
 
         if let Some(job) = self.reveal_queue.front_mut() {
@@ -1168,16 +1287,36 @@ impl App {
     }
 
     fn handle_chat_key(&mut self, key: KeyEvent) -> Result<bool> {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
-            self.messages.clear();
-            self.reveal_queue.clear();
-            self.status_note = "transcript purged".to_string();
-            return Ok(false);
+        // Help overlay scroll
+        if self.show_help {
+            match key.code {
+                KeyCode::PageUp | KeyCode::Up => {
+                    self.help_scroll = self.help_scroll.saturating_sub(
+                        if matches!(key.code, KeyCode::PageUp) { 8 } else { 1 },
+                    );
+                    return Ok(false);
+                }
+                KeyCode::PageDown | KeyCode::Down => {
+                    self.help_scroll += if matches!(key.code, KeyCode::PageDown) { 8 } else { 1 };
+                    return Ok(false);
+                }
+                KeyCode::Esc | KeyCode::F(1) => {
+                    self.show_help = false;
+                    self.help_scroll = 0;
+                    if matches!(key.code, KeyCode::F(1)) {
+                        theme::set_random_theme();
+                        self.rotate_saying();
+                        self.status_note = "theme randomized // F1 help".to_string();
+                    }
+                    return Ok(false);
+                }
+                _ => {}
+            }
         }
 
         if !matches!(key.code, KeyCode::F(_))
             && !(key.modifiers.contains(KeyModifiers::CONTROL)
-                && matches!(key.code, KeyCode::Char('l') | KeyCode::Char('c')))
+                && matches!(key.code, KeyCode::Char('c')))
             && self.handle_ollama_picker_key(key)
         {
             return Ok(false);
@@ -1220,11 +1359,14 @@ impl App {
             }
             KeyCode::F(1) => {
                 self.show_help = !self.show_help;
+                self.help_scroll = 0;
                 theme::set_random_theme();
+                self.rotate_saying();
                 self.status_note = "theme randomized // F1 help".to_string();
             }
             KeyCode::F(9) => {
                 theme::set_random_theme();
+                self.rotate_saying();
                 self.status_note = "theme randomized".to_string();
                 self.add_system_message("color palette randomized -- F9 again for another, /theme reset to restore defaults");
             }
@@ -1349,14 +1491,14 @@ impl App {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     let area = self.body_area;
                     match c {
-                        'h' => self.tiling.focus_direction(area, -1, 0),
-                        'l' => self.tiling.focus_direction(area, 1, 0),
-                        'k' => self.tiling.focus_direction(area, 0, -1),
-                        'j' => self.tiling.focus_direction(area, 0, 1),
-                        'H' => self.tiling.swap_focused_with_direction(area, -1, 0),
-                        'L' => self.tiling.swap_focused_with_direction(area, 1, 0),
-                        'K' => self.tiling.swap_focused_with_direction(area, 0, -1),
-                        'J' => self.tiling.swap_focused_with_direction(area, 0, 1),
+                        'w' => self.tiling.focus_direction(area, 0, -1),
+                        'a' => self.tiling.focus_direction(area, -1, 0),
+                        's' => self.tiling.focus_direction(area, 0, 1),
+                        'd' => self.tiling.focus_direction(area, 1, 0),
+                        'W' => self.tiling.swap_focused_with_direction(area, 0, -1),
+                        'A' => self.tiling.swap_focused_with_direction(area, -1, 0),
+                        'S' => self.tiling.swap_focused_with_direction(area, 0, 1),
+                        'D' => self.tiling.swap_focused_with_direction(area, 1, 0),
                         'n' => {
                             self.tiling.cycle_focused_panel();
                             if let Some(p) = self.tiling.focused_panel() {
@@ -1367,7 +1509,7 @@ impl App {
                         ']' => self.tiling.resize_focused(0.05),
                         _ => {}
                     }
-                    if matches!(c, 'h' | 'l' | 'k' | 'j') {
+                    if matches!(c, 'w' | 'a' | 's' | 'd') {
                         if let Some(p) = self.tiling.focused_panel() {
                             self.status_note = format!("focus: {}", p.name());
                         }
@@ -1392,20 +1534,20 @@ impl App {
             return true;
         }
 
-        // Ctrl+j/k goes to tiles for inner terminal cycling
-        if matches!(key.code, KeyCode::Char('j') | KeyCode::Char('k')) {
+        // Ctrl+w/s routes to tiles for inner terminal cycling
+        if matches!(key.code, KeyCode::Char('w') | KeyCode::Char('s')) {
             return true;
         }
 
-        // Block Ctrl+h/l (outer focus), Ctrl+Shift (swap), Ctrl+n, Ctrl+[/]
+        // Block Ctrl+a/d (outer focus), Ctrl+Shift+WASD (swap), Ctrl+n, Ctrl+[/]
         !matches!(
             key.code,
-            KeyCode::Char('h')
-                | KeyCode::Char('l')
-                | KeyCode::Char('H')
-                | KeyCode::Char('J')
-                | KeyCode::Char('K')
-                | KeyCode::Char('L')
+            KeyCode::Char('a')
+                | KeyCode::Char('d')
+                | KeyCode::Char('W')
+                | KeyCode::Char('A')
+                | KeyCode::Char('S')
+                | KeyCode::Char('D')
                 | KeyCode::Char('n')
                 | KeyCode::Char('[')
                 | KeyCode::Char(']')
@@ -1443,8 +1585,14 @@ impl App {
     fn dispatch_input(&mut self, input: String) {
         self.follow_tail = true;
 
+        // Record slash commands and shell ops
+        if input.starts_with('/') || input.starts_with('!') {
+            self.record_op(truncate(&input, 60));
+        }
+
         if input == "/help" {
             self.show_help = !self.show_help;
+            self.help_scroll = 0;
             return;
         }
 
@@ -1474,6 +1622,7 @@ impl App {
                     self.video = Some(player);
                     self.video_enabled = true;
                     self.video_source_label = path.clone();
+                    self.record_op(format!("video: {}", truncate(&path, 50)));
                     self.status_note = format!("playing: {}", truncate(&path, 40));
                     self.add_system_message(format!("video loaded: {}", path));
                 }
@@ -1499,6 +1648,7 @@ impl App {
                 return;
             }
             self.pending_video_load = true;
+            self.record_op(format!("youtube: {}", truncate(&url, 50)));
             self.status_note = "youtube stream resolving".to_string();
             self.add_system_message(format!("youtube stream requested: {}", truncate(&url, 72)));
             let tx = self.events_tx.clone();
@@ -1557,6 +1707,7 @@ impl App {
 
         if input == "/randomize" || input == "/theme random" {
             theme::set_random_theme();
+            self.rotate_saying();
             self.add_system_message("color palette randomized -- /theme reset to restore defaults");
             self.status_note = "theme randomized".to_string();
             return;
@@ -1879,6 +2030,7 @@ impl App {
         self.pending_ai = true;
         self.streaming_active = true;
         self.tool_loop_depth = 0;
+        self.record_op(format!("ai: {} -> {}", truncate(&input, 40), self.provider.name()));
         self.status_note = format!("streaming -> {}", self.provider_status_badge());
 
         // Create the assistant message shell for streaming into
@@ -1923,10 +2075,7 @@ impl App {
         self.pending_shells += 1;
         self.status_note = format!("dispatching ops payload -> {}", truncate(&command, 28));
         self.last_shell_status = format!("running `{}`", truncate(&command, 26));
-        self.recent_commands.push_front(command.clone());
-        while self.recent_commands.len() > 5 {
-            self.recent_commands.pop_back();
-        }
+        self.record_op(format!("$ {}", truncate(&command, 60)));
 
         let tx = self.events_tx.clone();
         tokio::spawn(async move {
@@ -1958,6 +2107,18 @@ impl App {
         self.messages.push(message);
     }
 
+    fn rotate_saying(&mut self) {
+        self.current_saying = rand::thread_rng().gen_range(0..SAYINGS.len());
+        self.saying_changed = Instant::now();
+    }
+
+    fn record_op(&mut self, op: impl Into<String>) {
+        self.recent_ops.push_front(op.into());
+        while self.recent_ops.len() > 12 {
+            self.recent_ops.pop_back();
+        }
+    }
+
     fn persist(&self, provider: &AIProvider, role: &str, kind: &str, content: &str) {
         if let Some(db) = &self.db {
             let _ = db.save_message(provider.db_key(), role, kind, content);
@@ -1974,6 +2135,7 @@ impl App {
             .iter()
             .map(|tc| tc.name.clone())
             .collect();
+        self.record_op(format!("tools: {}", call_names.join(", ")));
         self.status_note = format!("agent executing: {}", call_names.join(", "));
         self.add_system_message(format!(
             "agent tool loop [{}/10]: executing {}",
@@ -2196,7 +2358,7 @@ impl App {
             .title(" [SYSTEM:DEM0ZONE v2.0] [MODE:AGENTIC] [MODULES:AI+VIDEO+WEBCAM+3D+ANALYTICS] ")
             .title_style(Style::default().fg(t().accent4).bold())
             .borders(Borders::ALL)
-            .border_type(BorderType::Double)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(t().accent1));
         frame.render_widget(outer, area);
 
@@ -2316,7 +2478,7 @@ impl App {
         render_scroller(
             frame.buffer_mut(),
             scroller_area,
-            SCROLLER_TEXT,
+            " ASCIIVISION v2.0 // AI DEMOZONE // LIVE VIDEO CHAT // WEBCAM ASCII // 3D EFFECTS ENGINE // TRUE PTY TILES // F2 MODEL // F4 FX CYCLE // F5 WEBCAM // F6 LAYOUT // F7 TILES // THIS TERMINAL HAS LEFT THE BUILDING ",
             phase,
             t().accent4,
         );
@@ -2350,7 +2512,7 @@ impl App {
         // not as a global overlay (which would overwrite all other panels).
 
         self.render_input(frame, layout[2]);
-        render_scroller(frame.buffer_mut(), layout[3], SCROLLER_TEXT, phase, t().accent1);
+        render_saying(frame.buffer_mut(), layout[3], SAYINGS[self.current_saying], phase);
 
         if self.show_help {
             self.render_help_overlay(frame, area);
@@ -2358,6 +2520,89 @@ impl App {
 
         if self.show_ollama_picker {
             self.render_ollama_overlay(frame, area);
+        }
+    }
+
+    fn panel_chrome(&self, panel: PanelKind, is_focused: bool) -> (String, Style, Color) {
+        match panel {
+            PanelKind::Transcript => (
+                " TRANSCRIPT ".to_string(),
+                Style::default().fg(t().accent4).bold(),
+                if is_focused { t().accent4 } else { t().accent3 },
+            ),
+            PanelKind::Games => (
+                self.games.title(),
+                Style::default().fg(t().accent2).bold(),
+                if is_focused { t().accent4 } else { t().accent1 },
+            ),
+            PanelKind::Tiles => (
+                self.tiles.title(),
+                Style::default().fg(t().accent2).bold(),
+                if is_focused { t().accent4 } else { t().accent1 },
+            ),
+            PanelKind::Video => {
+                let title = if self.video_enabled {
+                    if self.pending_video_load {
+                        " LIVE VIDEO BUS // YOUTUBE LOADING "
+                    } else {
+                        " LIVE VIDEO BUS "
+                    }
+                } else {
+                    " SYNTHETIC FIELD "
+                };
+                (title.to_string(), Style::default().fg(t().accent2).bold(), t().accent1)
+            }
+            PanelKind::Webcam => {
+                let title = if self.webcam.is_some() {
+                    " WEBCAM // LIVE ASCII "
+                } else {
+                    " WEBCAM // OFFLINE "
+                };
+                (title.to_string(), Style::default().fg(t().accent4).bold(), t().accent3)
+            }
+            PanelKind::Telemetry => (
+                " TELEMETRY ".to_string(),
+                Style::default().fg(t().accent4).bold(),
+                t().accent3,
+            ),
+            PanelKind::OpsDeck => (
+                format!(" OPS DECK ({}) ", self.recent_ops.len()),
+                Style::default().fg(t().accent1).bold(),
+                t().accent1,
+            ),
+            PanelKind::Effects3D => {
+                let title = if self.effects.active {
+                    format!(" 3D EFFECTS // {} ", self.effects.kind.name())
+                } else {
+                    " 3D EFFECTS // OFFLINE ".to_string()
+                };
+                (title, Style::default().fg(t().accent2).bold(), if is_focused { t().accent4 } else { t().accent1 })
+            }
+            PanelKind::Analytics => (
+                " ANALYTICS DASHBOARD ".to_string(),
+                Style::default().fg(t().accent2).bold(),
+                t().accent1,
+            ),
+            PanelKind::VideoChatFeeds => (
+                " VIDEO CHAT // LIVE FEEDS ".to_string(),
+                Style::default().fg(t().accent2).bold(),
+                t().accent1,
+            ),
+            PanelKind::VideoChatMessages => (
+                " CHAT STREAM ".to_string(),
+                Style::default().fg(t().accent4).bold(),
+                t().accent3,
+            ),
+            PanelKind::VideoChatUsers => (
+                " CONNECTED USERS ".to_string(),
+                Style::default().fg(t().accent2).bold(),
+                t().accent1,
+            ),
+            PanelKind::SystemMonitor => (
+                " SYS MONITOR ".to_string(),
+                Style::default().fg(t().accent2).bold(),
+                if is_focused { t().accent4 } else { t().accent3 },
+            ),
         }
     }
 
@@ -2386,17 +2631,6 @@ impl App {
             PanelKind::Telemetry => self.render_telemetry(frame, area, phase),
             PanelKind::OpsDeck => self.render_ops_panel(frame, area, phase),
             PanelKind::Effects3D => {
-                let title = if self.effects.active {
-                    format!(" 3D EFFECTS // {} ", self.effects.kind.name())
-                } else {
-                    " 3D EFFECTS // OFFLINE ".to_string()
-                };
-                let block = Block::default()
-                    .title(title)
-                    .title_style(Style::default().fg(t().accent2).bold())
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(if is_focused { t().accent4 } else { t().accent1 }));
-                frame.render_widget(block, area);
                 let inner = area.inner(Margin { horizontal: 1, vertical: 1 });
                 if self.effects.active {
                     self.effects.render(frame.buffer_mut(), inner, phase);
@@ -2420,6 +2654,20 @@ impl App {
                 self.sysmon.render(frame, area, phase, is_focused);
             }
         }
+
+        // ─── BORDER SHIELD ───────────────────────────────────────────────
+        // Redraw border LAST so content can never corrupt panel edges.
+        // Each panel above renders its own border + content; this second
+        // pass guarantees the final border is always pristine regardless
+        // of any content overflow, effect rendering, or buffer writes.
+        let (title, title_style, border_color) = self.panel_chrome(panel, is_focused);
+        let shield = Block::default()
+            .title(title)
+            .title_style(title_style)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border_color));
+        frame.render_widget(shield, area);
     }
 
     fn render_messages_tile(&self, frame: &mut Frame, area: Rect, is_focused: bool) {
@@ -2428,7 +2676,7 @@ impl App {
             .title(" TRANSCRIPT ")
             .title_style(Style::default().fg(t().accent4).bold())
             .borders(Borders::ALL)
-            .border_type(if is_focused { BorderType::Double } else { BorderType::Plain })
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border_color));
         frame.render_widget(block, area);
 
@@ -2441,7 +2689,7 @@ impl App {
             .title(" COMMAND DECK ")
             .title_style(Style::default().fg(t().accent1).bold())
             .borders(Borders::ALL)
-            .border_type(BorderType::Double)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(t().accent1));
         frame.render_widget(block, area);
 
@@ -2457,13 +2705,14 @@ impl App {
             phase * 1.2 + 1.0,
             Some(inner),
         );
-        render_gradient_text(
+        render_gradient_text_clipped(
             frame.buffer_mut(),
             inner.x + 10,
             inner.y,
             "ASCIIVISION v2 // ALL-IN-ONE TERMINAL POWERHOUSE",
             t().accent1,
             t().accent4,
+            Some(inner.x + inner.width),
         );
 
         let fx_tag = if self.effects.active {
@@ -2496,25 +2745,28 @@ impl App {
             if self.pending_ai { "live" } else { "idle" },
             self.pending_shells,
         );
-        render_gradient_text(
+        render_gradient_text_clipped(
             frame.buffer_mut(),
             inner.x + 10,
             inner.y + 1,
             &meta,
             t().text,
             self.provider.color(),
+            Some(inner.x + inner.width),
         );
 
         let status = truncate(&self.status_note, inner.width.saturating_sub(24) as usize);
         let badge = format!("[{}]", current_spinner(phase));
-        let x = area.x + area.width.saturating_sub(status.chars().count() as u16 + 6);
-        render_gradient_text(
+        let status_text = format!("{} {}", badge, status);
+        let x = inner.x + inner.width.saturating_sub(status_text.chars().count() as u16);
+        render_gradient_text_clipped(
             frame.buffer_mut(),
-            x,
+            x.max(inner.x),
             inner.y,
-            &format!("{} {}", badge, status),
+            &status_text,
             t().accent2,
             t().text,
+            Some(inner.x + inner.width),
         );
     }
 
@@ -2635,13 +2887,14 @@ impl App {
             let msg_y = inner.y + inner.height.saturating_sub(2);
             let msg = "NO SIGNAL // /video <path> or /youtube <url>";
             let msg_x = inner.x + inner.width.saturating_sub(msg.len() as u16) / 2;
-            render_gradient_text(
+            render_gradient_text_clipped(
                 frame.buffer_mut(),
                 msg_x,
                 msg_y,
                 msg,
                 t().accent4,
                 t().muted,
+                Some(inner.x + inner.width),
             );
         }
     }
@@ -2765,10 +3018,13 @@ impl App {
     }
 
     fn render_ops_panel(&self, frame: &mut Frame, area: Rect, phase: f32) {
+        let op_count = self.recent_ops.len();
+        let title = format!(" OPS DECK ({}) ", op_count);
         let block = Block::default()
-            .title(" OPS DECK ")
+            .title(title)
             .title_style(Style::default().fg(t().accent1).bold())
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(t().accent1));
         frame.render_widget(block, area);
         let inner = area.inner(Margin {
@@ -2776,51 +3032,25 @@ impl App {
             vertical: 1,
         });
 
-        let mut lines = vec![
-            Line::from(Span::styled(
-                "!<cmd>         raw shell",
-                Style::default().fg(t().text),
-            )),
-            Line::from(Span::styled(
-                "/server <port> host video chat",
-                Style::default().fg(t().text),
-            )),
-            Line::from(Span::styled(
-                "/connect <url> join video chat",
-                Style::default().fg(t().text),
-            )),
-            Line::from(Span::styled(
-                "/webcam /3d /fx /analytics /games /tiles [1-8]",
-                Style::default().fg(t().text),
-            )),
-            Line::from(Span::styled(
-                "/provider <name> /ollama switch ai route or local model picker",
-                Style::default().fg(t().text),
-            )),
-            Line::from(Span::styled(
-                "/youtube <url> stream YouTube into video bus",
-                Style::default().fg(t().text),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "recent ops:",
-                Style::default().fg(t().accent2).bold(),
-            )),
-        ];
+        let mut lines = Vec::new();
 
-        if self.recent_commands.is_empty() {
+        if self.recent_ops.is_empty() {
             lines.push(Line::from(Span::styled(
-                "  none yet",
+                "No operations yet.",
+                Style::default().fg(t().muted),
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Try: !command, /youtube, /games, or chat with AI",
                 Style::default().fg(t().muted),
             )));
         } else {
-            for command in &self.recent_commands {
+            let max_lines = inner.height.saturating_sub(1) as usize;
+            for (i, op) in self.recent_ops.iter().take(max_lines).enumerate() {
+                let age_color = if i == 0 { t().accent4 } else if i < 3 { t().accent3 } else { t().muted };
                 lines.push(Line::from(Span::styled(
-                    format!(
-                        "  {}",
-                        truncate(command, inner.width.saturating_sub(4) as usize)
-                    ),
-                    Style::default().fg(t().accent4),
+                    truncate(op, inner.width.saturating_sub(2) as usize),
+                    Style::default().fg(age_color),
                 )));
             }
         }
@@ -2832,8 +3062,10 @@ impl App {
             inner,
         );
 
-        let pulse_x = inner.x + inner.width.saturating_sub(8);
-        render_starburst(frame.buffer_mut(), pulse_x, inner.y + 1, 2, phase * 1.7, Some(inner));
+        if !self.recent_ops.is_empty() {
+            let pulse_x = inner.x + inner.width.saturating_sub(4);
+            render_starburst(frame.buffer_mut(), pulse_x, inner.y, 2, phase * 1.7, Some(inner));
+        }
     }
 
     fn render_videochat_feeds(&self, frame: &mut Frame, area: Rect, _phase: f32) {
@@ -2841,7 +3073,7 @@ impl App {
             .title(" VIDEO CHAT // LIVE FEEDS ")
             .title_style(Style::default().fg(t().accent2).bold())
             .borders(Borders::ALL)
-            .border_type(BorderType::Double)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(t().accent1));
         frame.render_widget(block, area);
 
@@ -2855,13 +3087,14 @@ impl App {
             if frames.is_empty() {
                 if let Some(ref local) = *vc.local_frame.read() {
                     render_ascii_frame(frame.buffer_mut(), inner, local, 0.9);
-                    render_gradient_text(
+                    render_gradient_text_clipped(
                         frame.buffer_mut(),
                         inner.x + 1,
                         inner.y,
                         &format!("{} (you)", self.username),
                         t().accent4,
                         t().text,
+                        Some(inner.x + inner.width),
                     );
                 } else {
                     frame.render_widget(
@@ -2904,13 +3137,14 @@ impl App {
                             } else {
                                 uname.clone()
                             };
-                            render_gradient_text(
+                            render_gradient_text_clipped(
                                 frame.buffer_mut(),
                                 cell_area.x + 1,
                                 cell_area.y,
                                 &label,
                                 if is_self { t().accent3 } else { t().accent4 },
                                 t().text,
+                                Some(cell_area.x + cell_area.width),
                             );
                         }
                     }
@@ -3052,7 +3286,7 @@ impl App {
             .title_style(Style::default().fg(t().accent4).bold())
             .borders(Borders::ALL)
             .border_style(Style::default().fg(t().accent3))
-            .border_type(BorderType::Double);
+            .border_type(BorderType::Rounded);
         frame.render_widget(block, area);
 
         let inner = area.inner(Margin {
@@ -3144,8 +3378,8 @@ impl App {
                 .title(" commands (Tab/Enter: apply, Esc: close, Up/Dn: navigate) ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(t().accent2))
-                .border_type(BorderType::Double);
-                
+                .border_type(BorderType::Rounded);
+
             let list = ratatui::widgets::List::new(items).block(block);
             frame.render_widget(Clear, list_area);
             frame.render_widget(list, list_area);
@@ -3164,7 +3398,7 @@ impl App {
             .title(title)
             .title_style(Style::default().fg(self.provider.color()).bold())
             .borders(Borders::ALL)
-            .border_type(BorderType::Double)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(t().accent1));
         frame.render_widget(block, popup);
 
@@ -3269,7 +3503,7 @@ impl App {
             .title(" HELP // ASCIIVISION v2 OPERATIONS MANUAL ")
             .title_style(Style::default().fg(t().accent1).bold())
             .borders(Borders::ALL)
-            .border_type(BorderType::Double)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(t().accent1));
         frame.render_widget(block, popup);
 
@@ -3308,7 +3542,7 @@ impl App {
             ]),
             Line::from(vec![
                 Span::styled("TILES      ", Style::default().fg(t().accent2).bold()),
-                Span::styled("/tiles or /tiles <1-8> boots real PTY terminals inside a focused tile; Ctrl+j/k cycle inner terminals, Ctrl+h/l move app focus", Style::default().fg(t().text)),
+                Span::styled("/tiles or /tiles <1-8> boots real PTY terminals inside a focused tile", Style::default().fg(t().text)),
             ]),
             Line::from(vec![
                 Span::styled("SHORTCUTS  ", Style::default().fg(t().accent2).bold()),
@@ -3316,7 +3550,7 @@ impl App {
             ]),
             Line::from(""),
             Line::from(Span::styled("Keyboard", Style::default().fg(t().accent4).bold())),
-            Line::from("  F1       toggle this overlay"),
+            Line::from("  F1       toggle this overlay + randomize theme"),
             Line::from("  F2       cycle AI provider (Claude, Grok, GPT-5, Gemini, Ollama)"),
             Line::from("  F3       toggle live video panel"),
             Line::from("  F4       cycle 3D effects, then off, then repeat"),
@@ -3326,41 +3560,69 @@ impl App {
             Line::from("  F8       cycle focused tile panel type"),
             Line::from("  F9       randomize color theme"),
             Line::from("  F10      reset theme to defaults"),
-            Line::from("  Ctrl+L   clear transcript"),
             Line::from("  PgUp/Dn  scroll transcript"),
-            Line::from("  Esc      exit"),
+            Line::from("  /clear   clear transcript"),
+            Line::from("  Esc      exit (press twice)"),
             Line::from(""),
-            Line::from(Span::styled("Tiling (Hyprland-style)", Style::default().fg(t().accent4).bold())),
-            Line::from("  Ctrl+h/l  focus tile left/right"),
-            Line::from("  Ctrl+j/k  focus tile down/up"),
-            Line::from("  Ctrl+H/L  swap tile left/right (shift)"),
-            Line::from("  Ctrl+J/K  swap tile down/up (shift)"),
+            Line::from(Span::styled("Tiling Navigation (WASD)", Style::default().fg(t().accent4).bold())),
+            Line::from("  Ctrl+W    focus tile up"),
+            Line::from("  Ctrl+A    focus tile left"),
+            Line::from("  Ctrl+S    focus tile down"),
+            Line::from("  Ctrl+D    focus tile right"),
+            Line::from("  Ctrl+Shift+W/A/S/D  swap tile in that direction"),
             Line::from("  Ctrl+[/]  resize focused split narrower/wider"),
-            Line::from("  Ctrl+n    cycle focused tile to next panel type"),
-            Line::from("  /layout  cycle layout (default, dual, triple, quad, webcam, focus)"),
-            Line::from("  Games     focus arcade tile and use 1-3 / WASD / Esc / R"),
-            Line::from("  Tiles     focus PTY tile and type directly; Ctrl+j/k cycle inner terminals, Ctrl+h/l move app focus"),
+            Line::from("  Ctrl+N    cycle focused tile to next panel type"),
+            Line::from("  /layout   cycle layout (default, dual, triple, quad, webcam, focus)"),
+            Line::from("  Games     focus arcade tile, then 1-3 / WASD / Esc / R"),
+            Line::from("  Tiles     focus PTY tile and type directly"),
             Line::from(""),
             Line::from(Span::styled("Modules", Style::default().fg(t().accent4).bold())),
             Line::from("  AI Chat: Claude 4.5, Grok 4, GPT-5, Gemini 3 Flash, local Ollama models"),
-            Line::from("  Video: MP4 ASCII playback | Webcam: Live camera ASCII feed"),
-            Line::from("  Video Chat: WebSocket multi-user streaming"),
+            Line::from("  Video: MP4 ASCII playback | YouTube: /youtube <url>"),
+            Line::from("  Webcam: Live camera ASCII feed | Video Chat: WebSocket multi-user"),
             Line::from("  3D FX: matrix, plasma, starfield, wireframe, fire, particles"),
-            Line::from("  Games: Pac-Man, Space Invaders, 3D Penguin"),
-            Line::from("  Tiles: 1-8 live PTY terminals for codex / claude / gemini / shell work"),
+            Line::from("  Games: Pac-Man, Space Invaders, 3D Penguin (OpenTUI 3D or built-in)"),
+            Line::from("  Tiles: 1-8 live PTY terminals for shell work"),
             Line::from("  Sys Monitor: CPU, memory, swap, network, load average"),
             Line::from("  Analytics: Real-time conversation statistics"),
-            Line::from("  Shell: Full bash, curl, brew integration"),
+            Line::from("  Ops Deck: Live operation log | Shell: Full bash, curl, brew"),
         ]);
+
+        let inner = popup.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
 
         frame.render_widget(
             Paragraph::new(text)
                 .wrap(Wrap { trim: false })
+                .scroll((self.help_scroll as u16, 0))
                 .style(Style::default().fg(t().text).bg(t().panel_bg)),
-            popup.inner(Margin {
-                horizontal: 2,
-                vertical: 1,
-            }),
+            inner,
+        );
+
+        // Scroll indicator
+        if self.help_scroll > 0 {
+            render_gradient_text_clipped(
+                frame.buffer_mut(),
+                inner.x,
+                inner.y,
+                "\u{25b2} PgUp to scroll up",
+                t().accent2,
+                t().muted,
+                Some(inner.x + inner.width),
+            );
+        }
+        let hint = "PgUp/PgDn scroll \u{2022} Esc/F1 close";
+        let hx = inner.x + inner.width.saturating_sub(hint.len() as u16);
+        render_gradient_text_clipped(
+            frame.buffer_mut(),
+            hx.max(inner.x),
+            inner.y + inner.height.saturating_sub(1),
+            hint,
+            t().muted,
+            t().accent2,
+            Some(inner.x + inner.width),
         );
     }
 }
@@ -3774,6 +4036,50 @@ fn render_scroller(buffer: &mut Buffer, area: Rect, text: &str, phase: f32, acce
                 accent,
                 t().text,
                 index as f32 / area.width.max(1) as f32,
+            ));
+        }
+    }
+}
+
+fn render_saying(buffer: &mut Buffer, area: Rect, text: &str, phase: f32) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    // Fill background
+    for x in 0..area.width {
+        if let Some(cell) = buffer.cell_mut((area.x + x, area.y)) {
+            cell.set_char(' ');
+            cell.set_bg(Color::Rgb(9, 16, 24));
+        }
+    }
+
+    // Center the saying with decorative dots
+    let saying = format!(" \u{2022} {} \u{2022} ", text);
+    let text_len = saying.chars().count() as u16;
+    let start_x = area.x + area.width.saturating_sub(text_len) / 2;
+
+    // Gentle color pulse
+    let pulse = (phase * 0.8).sin() * 0.15 + 0.85;
+
+    for (i, ch) in saying.chars().enumerate() {
+        let px = start_x + i as u16;
+        if px >= area.x + area.width {
+            break;
+        }
+        if px < area.x {
+            continue;
+        }
+        if let Some(cell) = buffer.cell_mut((px, area.y)) {
+            cell.set_char(ch);
+            let blend = i as f32 / text_len.max(1) as f32;
+            let fg = mix_color(t().accent1, t().accent4, blend);
+            // Apply gentle pulse
+            let (r, g, b) = crate::theme::color_to_rgb(fg);
+            cell.set_fg(Color::Rgb(
+                (r as f32 * pulse).min(255.0) as u8,
+                (g as f32 * pulse).min(255.0) as u8,
+                (b as f32 * pulse).min(255.0) as u8,
             ));
         }
     }

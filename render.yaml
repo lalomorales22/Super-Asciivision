@@ -1,6 +1,9 @@
 services:
   - type: web
-    name: hands-relay
+    # IMPORTANT: Change this name to something unique before deploying!
+    # Render derives your public URL from it (e.g. my-relay.onrender.com).
+    # Example: name: janes-asciivision-relay
+    name: my-asciivision-relay
     runtime: node
     rootDir: hands-relay
     plan: free

@@ -87,17 +87,21 @@ impl EffectsEngine {
     pub fn cycle_with_off(&mut self) {
         if !self.active {
             self.active = true;
+            self.kind = EffectKind::MatrixRain;
             self.reset_buffers();
             return;
         }
 
-        if matches!(self.kind, EffectKind::Particles) {
+        let next = self.kind.cycle();
+        if matches!(next, EffectKind::MatrixRain) {
+            // Wrapped around — turn off
             self.active = false;
+            self.kind = EffectKind::MatrixRain;
             self.reset_buffers();
             return;
         }
 
-        self.kind = self.kind.cycle();
+        self.kind = next;
         self.reset_buffers();
     }
 
@@ -258,10 +262,12 @@ impl EffectsEngine {
             let sx = (star.x / star.z) * cx + cx;
             let sy = (star.y / star.z) * cy + cy;
 
+            if sx < 0.0 || sy < 0.0 || sx >= area.width as f32 || sy >= area.height as f32 {
+                continue;
+            }
             let px = area.x + sx as u16;
             let py = area.y + sy as u16;
 
-            if px >= area.x && px < area.x + area.width && py >= area.y && py < area.y + area.height
             {
                 let brightness = ((1.0 - star.z) * 255.0).clamp(40.0, 255.0) as u8;
                 let ch = if star.z < 0.3 {
@@ -303,9 +309,12 @@ impl EffectsEngine {
         }
 
         for p in &self.particles {
+            if p.x < 0.0 || p.y < 0.0 || p.x >= area.width as f32 || p.y >= area.height as f32 {
+                continue;
+            }
             let px = area.x + p.x as u16;
             let py = area.y + p.y as u16;
-            if px < area.x + area.width && py < area.y + area.height {
+            {
                 let fade = p.life.clamp(0.0, 1.0);
                 let (r, g, b) = p.color;
                 let r = (r as f32 * fade) as u8;
@@ -506,9 +515,12 @@ pub fn render_wireframe_cube(buffer: &mut Buffer, area: Rect, phase: f32) {
     }
 
     for (i, &(sx, sy, depth)) in projected.iter().enumerate() {
+        if sx < 0.0 || sy < 0.0 || sx >= area.width as f32 || sy >= area.height as f32 {
+            continue;
+        }
         let px = area.x + sx as u16;
         let py = area.y + sy as u16;
-        if px >= area.x && px < area.x + area.width && py >= area.y && py < area.y + area.height {
+        {
             let brightness = ((1.0 - (depth - 2.0).abs() / 2.0) * 255.0).clamp(120.0, 255.0) as u8;
             if let Some(cell) = buffer.cell_mut((px, py)) {
                 cell.set_char(['A', 'S', 'C', 'I', 'I', 'V', 'I', 'S'][i % 8]);
@@ -522,16 +534,21 @@ fn draw_line(buffer: &mut Buffer, area: Rect, x0: f32, y0: f32, x1: f32, y1: f32
     let dx = (x1 - x0).abs();
     let dy = (y1 - y0).abs();
     let steps = dx.max(dy).max(1.0) as usize;
+    let w = area.width as f32;
+    let h = area.height as f32;
 
     for i in 0..=steps {
         let t = i as f32 / steps.max(1) as f32;
         let x = x0 + (x1 - x0) * t;
         let y = y0 + (y1 - y0) * t;
 
+        if x < 0.0 || y < 0.0 || x >= w || y >= h {
+            continue;
+        }
         let px = area.x + x as u16;
         let py = area.y + y as u16;
 
-        if px >= area.x && px < area.x + area.width && py >= area.y && py < area.y + area.height {
+        {
             let ch = if dx > dy * 2.0 {
                 '-'
             } else if dy > dx * 2.0 {

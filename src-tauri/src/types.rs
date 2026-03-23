@@ -99,6 +99,8 @@ pub struct Settings {
     pub hands_relay_url: Option<String>,
     pub hands_relay_machine_id: Option<String>,
     pub hands_relay_desktop_token: Option<String>,
+    pub ollama_model: Option<String>,
+    pub theme: Option<String>,
 }
 
 impl Default for Settings {
@@ -118,6 +120,8 @@ impl Default for Settings {
             hands_relay_url: None,
             hands_relay_machine_id: None,
             hands_relay_desktop_token: None,
+            ollama_model: None,
+            theme: None,
         }
     }
 }
@@ -139,6 +143,8 @@ pub struct SettingsPatch {
     pub hands_relay_url: Option<String>,
     pub hands_relay_machine_id: Option<String>,
     pub hands_relay_desktop_token: Option<String>,
+    pub ollama_model: Option<String>,
+    pub theme: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -429,12 +435,24 @@ pub struct EditorTimelineClip {
     pub still_duration: Option<f64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorOverlayClip {
+    pub file_path: String,
+    pub start: f64,
+    pub end: f64,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportEditorTimelineRequest {
     pub title: Option<String>,
     pub category_id: Option<String>,
     pub clips: Vec<EditorTimelineClip>,
+    pub overlays: Option<Vec<EditorOverlayClip>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -14,11 +14,19 @@ Click the rainbow **ASCIIVISION** button in the nav bar to drop into the termina
 | **Image & Video** | Image and video generation via xAI, category-organized gallery |
 | **Voice & Audio** | Text-to-speech generation and live realtime voice chat |
 | **Media Editor** | Timeline-based export workflow via ffmpeg |
-| **IDE** | File explorer, code editor with syntax highlighting, AI copilot (xAI or Ollama), browser preview |
+| **IDE** | File explorer, multi-tab code editor with syntax highlighting, AI copilot (xAI or Ollama), Quick Open (Cmd+P), browser preview — opens without a workspace |
 | **Tiles** | 1x2, 2x2, or 3x3 grid of independent PTY terminal sessions |
-| **Music** | Built-in player — MP3/WAV/OGG/FLAC/M4A/AAC/OPUS/WMA, metadata display, mini-player bar, shuffle/repeat |
-| **Hands** | Mobile bridge — pair your phone, chat and generate media remotely |
-| **Settings** | Model selection, voice config, always-on-top, API key management |
+| **Music** | Built-in player — MP3/WAV/OGG/FLAC/M4A/AAC/OPUS/WMA, metadata display, hideable mini-player bar, shuffle/repeat, playlist/category sidebar with drag-and-drop import |
+| **Hands** | Mobile bridge — pair your phone, chat and generate media remotely (Render relay or Cloudflare tunnel) |
+| **Settings** | Theme selector (6 themes), model selection, default Ollama model, voice config, always-on-top, API key management for xAI + ASCIIVision providers |
+
+### Themes
+
+Six built-in color themes that restyle all buttons, borders, active states, and accents across the entire app:
+
+**Emerald** (default) · **Ocean** (blue/cyan) · **Sunset** (orange/rose) · **Violet** (purple/pink) · **Golden** (amber/yellow) · **Crimson** (red/rose)
+
+Switch themes in **Settings** — changes apply instantly with live preview. The animated logo glow and nav indicator adapt to match.
 
 ## ASCIIVision Terminal
 
@@ -30,10 +38,10 @@ Click the rainbow **ASCIIVISION** button in the nav bar to drop into the termina
 | **Live Webcam** | Camera feed as ASCII art in real-time (F5) |
 | **Video Chat** | WebSocket-based multi-user live ASCII video rooms |
 | **3D Effects** | Matrix rain, plasma, starfield, wireframe cube, fire, particle storms (F4) |
-| **Tiling** | PTY-backed terminals in 1–8 way grids with Hyprland-style Ctrl+hjkl controls (F6/F7) |
+| **Tiling** | PTY-backed terminals in 1–8 way grids with Ctrl+WASD focus/swap (F6/F7) |
 | **Games** | Pac-Man, Space Invaders, 3D Penguin |
 | **System Monitor** | CPU, memory, swap, network I/O, load average, per-core sparklines |
-| **Themes** | F9 randomizes colors, F10 resets |
+| **Themes** | F9 cycles through color themes, F10 resets |
 
 ---
 
@@ -171,14 +179,7 @@ No API key needed. Just run `ollama serve` and pull a model (e.g., `ollama pull 
 
 ### ASCIIVision (Multi-Provider)
 
-Create `asciivision-core/.env` with the providers you want:
-
-```env
-CLAUDE_API_KEY=sk-ant-...
-GROK_API_KEY=xai-...
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=AIza...
-```
+Open **Settings** in the app and add your API keys for Claude, OpenAI, and Gemini. Your xAI key is shared automatically. ASCIIVision picks them up when you launch it — no manual `.env` editing needed.
 
 ---
 
@@ -190,7 +191,7 @@ GEMINI_API_KEY=AIza...
 │                                                  │
 │  Frontend (React/TS)         Backend (Rust)       │
 │  ┌──────────────────┐       ┌──────────────────┐ │
-│  │ App.tsx (~6.8K)   │◄─IPC─►│ lib.rs (commands)│ │
+│  │ App.tsx (~8.9K)   │◄─IPC─►│ lib.rs (commands)│ │
 │  │ appStore.ts       │       │ terminal.rs (PTY)│ │
 │  │ tauri.ts (bridge) │       │ hands.rs (mobile)│ │
 │  │ types.ts          │       │ agent.rs (tools) │ │
@@ -217,17 +218,19 @@ Pair your phone for remote access to chat, image/video/audio generation, and loc
 
 ### Deploy the Relay on Render
 
-1. **Create a Render account** at [render.com](https://render.com) (free tier works).
-2. **Connect your GitHub** — link the repo that contains this project.
-3. **Create a Blueprint:**
+1. **Pick a unique service name.** Open `render.yaml` in the repo root and change the `name` field to something unique to you (e.g. `alex-ascii-relay`). Render turns this into your public URL (`https://<your-name>.onrender.com`) and names are globally unique — two people cannot share the same name.
+2. **Create a Render account** at [render.com](https://render.com) (free tier works).
+3. **Connect your GitHub** — link the repo (with your updated `render.yaml`) to Render.
+4. **Create a Blueprint:**
    - From the Render dashboard, click **New** > **Blueprint**.
-   - Select this repository. Render will detect the `render.yaml` at the root.
-   - Click **Apply** — this creates the `hands-relay` web service automatically on the free plan.
-4. **Wait for the deploy** to finish. Render will give you an HTTPS URL like:
+   - Select this repository. Render will detect `render.yaml` at the root.
+   - Confirm the service name matches what you set in step 1.
+   - Click **Apply** — this creates the `hands-relay` web service on the free plan.
+5. **Wait for the deploy** to finish. Copy your Render HTTPS URL, e.g.:
    ```
-   https://hands-relay-xxxx.onrender.com
+   https://alex-ascii-relay.onrender.com
    ```
-5. **Keep this URL private.** Anyone with it could connect to your relay. Do not share it publicly or commit it to a repo.
+6. **Keep this URL private.** Anyone with it could connect to your relay. Do not share it publicly or commit it to a repo.
 
 ### Connect the App
 
@@ -235,7 +238,7 @@ Pair your phone for remote access to chat, image/video/audio generation, and loc
 2. Set **Provider** to `Hands Relay`.
 3. Paste your Render HTTPS URL into the **Relay URL** field.
 4. Click **Start secure link** — the desktop opens a WebSocket to the relay and generates a pairing code.
-5. On your phone, open the relay URL in a browser (e.g., `https://hands-relay-xxxx.onrender.com`).
+5. On your phone, open the relay URL in a browser (e.g., `https://alex-ascii-relay.onrender.com`).
 6. Enter the **pairing code** shown in the app. Once paired, you can chat, generate images/video/audio, and browse workspace files from your phone.
 
 ### Security Notes
@@ -253,8 +256,9 @@ Pair your phone for remote access to chat, image/video/audio generation, and loc
 | What | Where |
 |------|-------|
 | xAI API key | System keychain (macOS Keychain / Linux Secret Service) |
-| App data (conversations, settings, media) | `~/Library/Application Support/SuperASCIIVision/` (macOS) or `~/.local/share/SuperASCIIVision/` (Linux) |
-| Music library | `~/Music/SuperASCIIVision/` (configurable) |
+| ASCIIVision API keys (Claude, OpenAI, Gemini) | `~/.config/superasciivision/secrets/*.key` (0600 permissions, auto-syncs xAI key from Settings) |
+| App data (conversations, settings, themes, media) | `~/Library/Application Support/SuperASCIIVision/` (macOS) or `~/.local/share/SuperASCIIVision/` (Linux) |
+| Music library & playlists | `~/Music/SuperASCIIVision/` (configurable) — subfolders are playlists/categories |
 | ASCIIVision conversations | `~/.config/asciivision/conversations.db` |
 | Ollama models | Local only — managed by Ollama in `~/.ollama/` |
 
@@ -278,12 +282,12 @@ cargo test --manifest-path src-tauri/Cargo.toml     # Backend tests
 
 ```
 ├── src/                        # React/TypeScript frontend
-│   ├── App.tsx                 # All pages and components (~6.8K lines)
-│   ├── store/appStore.ts       # Zustand state management (~1.1K lines)
+│   ├── App.tsx                 # All pages and components (~8.9K lines)
+│   ├── store/appStore.ts       # Zustand state management (~1.3K lines)
 │   ├── lib/tauri.ts            # IPC bridge to Rust backend
 │   └── types.ts                # Shared types
-├── src-tauri/                  # Rust backend (14 source files, ~8.8K lines)
-│   ├── src/lib.rs              # Tauri commands — chat, media, terminal, music
+├── src-tauri/                  # Rust backend (14 source files, ~10.2K lines)
+│   ├── src/lib.rs              # Tauri commands — chat, media, terminal, music, categories
 │   ├── src/agent.rs            # Agentic tool-use loop
 │   ├── src/terminal.rs         # PTY session management
 │   ├── src/hands.rs            # Mobile bridge service

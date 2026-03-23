@@ -100,7 +100,7 @@ impl SystemMonitor {
             .title(" SYS MONITOR ")
             .title_style(Style::default().fg(t().accent2).bold())
             .borders(Borders::ALL)
-            .border_type(if is_focused { BorderType::Double } else { BorderType::Plain })
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border_color));
         frame.render_widget(block, area);
 

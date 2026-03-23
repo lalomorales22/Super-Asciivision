@@ -138,6 +138,8 @@ impl Database {
         ensure_column(&conn, "settings", "hands_relay_url", "TEXT")?;
         ensure_column(&conn, "settings", "hands_relay_machine_id", "TEXT")?;
         ensure_column(&conn, "settings", "hands_relay_desktop_token", "TEXT")?;
+        ensure_column(&conn, "settings", "ollama_model", "TEXT")?;
+        ensure_column(&conn, "settings", "theme", "TEXT")?;
         ensure_column(
             &conn,
             "conversations",
@@ -186,7 +188,7 @@ impl Database {
     pub fn load_settings(&self) -> AppResult<Settings> {
         let conn = self.connect()?;
         let mut statement = conn.prepare(
-            "SELECT hotkey, always_on_top, default_provider, xai_model, xai_image_model, xai_video_model, xai_tts_model, xai_realtime_model, xai_voice_name, hands_tunnel_provider, hands_tunnel_executable, hands_relay_url, hands_relay_machine_id, hands_relay_desktop_token FROM settings WHERE id = 1",
+            "SELECT hotkey, always_on_top, default_provider, xai_model, xai_image_model, xai_video_model, xai_tts_model, xai_realtime_model, xai_voice_name, hands_tunnel_provider, hands_tunnel_executable, hands_relay_url, hands_relay_machine_id, hands_relay_desktop_token, ollama_model, theme FROM settings WHERE id = 1",
         )?;
         let settings = statement.query_row([], |row| {
             Ok(Settings {
@@ -204,6 +206,8 @@ impl Database {
                 hands_relay_url: row.get(11)?,
                 hands_relay_machine_id: row.get(12)?,
                 hands_relay_desktop_token: row.get(13)?,
+                ollama_model: row.get(14)?,
+                theme: row.get(15)?,
             })
         })?;
         Ok(settings)
@@ -256,9 +260,15 @@ impl Database {
             current.hands_relay_desktop_token =
                 normalize_optional_text(Some(hands_relay_desktop_token));
         }
+        if let Some(ollama_model) = patch.ollama_model {
+            current.ollama_model = normalize_optional_text(Some(ollama_model));
+        }
+        if let Some(theme) = patch.theme {
+            current.theme = normalize_optional_text(Some(theme));
+        }
         let conn = self.connect()?;
         conn.execute(
-            "UPDATE settings SET hotkey = ?1, always_on_top = ?2, default_provider = ?3, xai_model = ?4, xai_image_model = ?5, xai_video_model = ?6, xai_tts_model = ?7, xai_realtime_model = ?8, xai_voice_name = ?9, hands_tunnel_provider = ?10, hands_tunnel_executable = ?11, hands_relay_url = ?12, hands_relay_machine_id = ?13, hands_relay_desktop_token = ?14 WHERE id = 1",
+            "UPDATE settings SET hotkey = ?1, always_on_top = ?2, default_provider = ?3, xai_model = ?4, xai_image_model = ?5, xai_video_model = ?6, xai_tts_model = ?7, xai_realtime_model = ?8, xai_voice_name = ?9, hands_tunnel_provider = ?10, hands_tunnel_executable = ?11, hands_relay_url = ?12, hands_relay_machine_id = ?13, hands_relay_desktop_token = ?14, ollama_model = ?15, theme = ?16 WHERE id = 1",
             params![
                 current.hotkey,
                 current.always_on_top as i64,
@@ -273,7 +283,9 @@ impl Database {
                 current.hands_tunnel_executable,
                 current.hands_relay_url,
                 current.hands_relay_machine_id,
-                current.hands_relay_desktop_token
+                current.hands_relay_desktop_token,
+                current.ollama_model,
+                current.theme
             ],
         )?;
         Ok(current)

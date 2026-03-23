@@ -9,6 +9,7 @@ import QRCode from "qrcode";
 import {
   AudioLines,
   Bot,
+  Captions,
   ChevronRight,
   ChevronDown,
   Code2,
@@ -16,16 +17,17 @@ import {
   Disc3,
   Download,
   Eye,
+  FastForward,
   Files,
   Folder,
   FolderPlus,
   FolderOpen,
+  Gauge,
   Globe,
   ImagePlus,
   LayoutGrid,
+  Hash,
   ListMusic,
-  MoveDown,
-  MoveUp,
   MessageSquarePlus,
   Mic,
   Music,
@@ -38,6 +40,7 @@ import {
   Repeat,
   Repeat1,
   Save,
+  Scissors,
   Send,
   Settings2,
   Shuffle,
@@ -52,6 +55,8 @@ import {
   WandSparkles,
   Wifi,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import hljs from "highlight.js/lib/core";
 import hljsBash from "highlight.js/lib/languages/bash";
@@ -123,6 +128,30 @@ interface EditorClip {
   trimStart: string;
   trimEnd: string;
   stillDuration: string;
+  speed: string;
+  mediaDuration?: number; // actual file duration in seconds, populated from media element
+}
+
+interface SubtitleClip {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  x: number; // percentage 0-100
+  y: number; // percentage 0-100
+  fontSize: number; // pixels
+}
+
+interface OverlayClip {
+  id: string;
+  assetId: string;
+  filePath: string;
+  start: number;
+  end: number;
+  x: number; // percentage 0-100
+  y: number; // percentage 0-100
+  width: number; // percentage 0-100
+  height: number; // percentage 0-100
 }
 
 interface TimelineTrackItem {
@@ -130,6 +159,13 @@ interface TimelineTrackItem {
   start: number;
   duration: number;
   end: number;
+}
+
+interface EditorContextMenu {
+  clipId: string;
+  trackType: "visual" | "audio" | "subtitle" | "overlay";
+  x: number;
+  y: number;
 }
 
 interface IdeTreeNode {
@@ -415,10 +451,6 @@ function buildIdeTree(items: WorkspaceItem[], roots: string[]) {
   return Array.from(rootNodes.values());
 }
 
-function extractAssistantCode(text: string) {
-  const fenced = text.match(/```(?:[\w-]+)?\n([\s\S]*?)```/);
-  return (fenced?.[1] ?? text).trim();
-}
 
 function encodePcm16Base64(input: Float32Array) {
   const buffer = new ArrayBuffer(input.length * 2);
@@ -559,6 +591,7 @@ function createEditorClip(asset: MediaAsset): EditorClip {
     trimStart: "0",
     trimEnd: "",
     stillDuration: "3",
+    speed: "1",
   };
 }
 
@@ -574,16 +607,24 @@ function parseSecondsInput(value: string, fallback?: number) {
   return parsed;
 }
 
+function getEditorClipSpeed(clip: EditorClip) {
+  const s = parseSecondsInput(clip.speed, 1) ?? 1;
+  return Math.max(0.25, Math.min(4, s));
+}
+
 function getEditorClipDuration(clip: EditorClip) {
+  const speed = getEditorClipSpeed(clip);
   if (clip.asset.kind === "image") {
-    return Math.max(parseSecondsInput(clip.stillDuration, 3) ?? 3, 0.5);
+    return Math.max((parseSecondsInput(clip.stillDuration, 3) ?? 3) / speed, 0.5);
   }
   const trimStart = parseSecondsInput(clip.trimStart, 0) ?? 0;
   const trimEnd = parseSecondsInput(clip.trimEnd);
   if (trimEnd !== undefined && trimEnd > trimStart) {
-    return Math.max(trimEnd - trimStart, 0.5);
+    return Math.max((trimEnd - trimStart) / speed, 0.5);
   }
-  return clip.asset.kind === "video" ? 6 : 8;
+  // Use actual media duration if known, otherwise fallback
+  const fallback = clip.mediaDuration ?? (clip.asset.kind === "video" ? 6 : 8);
+  return Math.max((fallback - trimStart) / speed, 0.5);
 }
 
 function formatTimelineSeconds(value: number) {
@@ -611,6 +652,10 @@ function buildTimelineTrack(clips: EditorClip[], track: "visual" | "audio") {
   });
 
   return { items, duration: cursor };
+}
+
+function findClipAtTime(items: TimelineTrackItem[], time: number): TimelineTrackItem | undefined {
+  return items.find((item) => time >= item.start && time < item.end);
 }
 
 function buildClipTrimPatch(clip: EditorClip, side: "start" | "end", deltaSeconds: number): Partial<EditorClip> {
@@ -693,6 +738,7 @@ function GrokShell() {
   const [page, setPage] = useState<AppPage>("chat");
   const [uiZoom, setUiZoom] = useState(100);
   const [asciivisionActive, setAsciivisionActive] = useState(false);
+  const [miniPlayerHidden, setMiniPlayerHidden] = useState(false);
   const [rightPanelVisible, setRightPanelVisible] = useState(true);
   const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>("workspace");
   const [terminalVisible, setTerminalVisible] = useState(false);
@@ -701,6 +747,10 @@ function GrokShell() {
   const [footerHeight, setFooterHeight] = useState(220);
   const [editorClips, setEditorClips] = useState<EditorClip[]>([]);
   const [activeEditorClipId, setActiveEditorClipId] = useState<string>();
+  const [subtitleClips, setSubtitleClips] = useState<SubtitleClip[]>([]);
+  const [overlayClips, setOverlayClips] = useState<OverlayClip[]>([]);
+  const [editorAspect, setEditorAspect] = useState<"landscape" | "vertical">("landscape");
+  const editorClipboardRef = useRef<EditorClip | null>(null);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [controlsOpen, setControlsOpen] = useState(false);
   const controlsRef = useRef<HTMLDivElement>(null);
@@ -807,7 +857,7 @@ function GrokShell() {
     : 0;
   const musicCurrentIndex = useAppStore((state) => state.musicCurrentIndex);
   const musicTracks = useAppStore((state) => state.musicTracks);
-  const showMusicMiniPlayer = musicCurrentIndex >= 0 && musicCurrentIndex < musicTracks.length && !asciivisionActive;
+  const showMusicMiniPlayer = musicCurrentIndex >= 0 && musicCurrentIndex < musicTracks.length && !asciivisionActive && !miniPlayerHidden;
   const chromeActions = useMemo<ShellChromeActions>(
     () => ({
       openBrowserPreview: (html) => {
@@ -816,6 +866,8 @@ function GrokShell() {
         setRightPanelMode("browser");
       },
       openEditorAsset: (asset) => {
+        // Images, videos, and audio all go into editorClips —
+        // buildTimelineTrack routes them to Visual (image/video) or Audio (audio)
         const clip = createEditorClip(asset);
         setEditorClips((current) => [...current, clip]);
         setActiveEditorClipId(clip.id);
@@ -853,7 +905,7 @@ function GrokShell() {
           <div className="col-[1/-1]">
             <TopBar
               page={page}
-              onSelectPage={(p) => { setAsciivisionActive(false); setPage(p); }}
+              onSelectPage={(p) => { setAsciivisionActive(false); setPage(p); if (p === "music") setMiniPlayerHidden(false); }}
               asciivisionActive={asciivisionActive}
               controlsOpen={controlsOpen}
               controlsRef={controlsRef}
@@ -904,26 +956,28 @@ function GrokShell() {
                 setEditorClips((current) => current.filter((clip) => clip.id !== clipId));
                 setActiveEditorClipId((current) => (current === clipId ? undefined : current));
               }}
-              onMoveEditorClip={(clipId, direction) =>
-                setEditorClips((current) => {
-                  const index = current.findIndex((clip) => clip.id === clipId);
-                  if (index < 0) {
-                    return current;
-                  }
-                  const nextIndex = direction === "up" ? index - 1 : index + 1;
-                  if (nextIndex < 0 || nextIndex >= current.length) {
-                    return current;
-                  }
-                  const next = [...current];
-                  const [clip] = next.splice(index, 1);
-                  next.splice(nextIndex, 0, clip);
-                  return next;
-                })
-              }
+              onAddEditorClip={(clip: EditorClip) => {
+                setEditorClips((current) => [...current, clip]);
+                setActiveEditorClipId(clip.id);
+              }}
+              onReorderClips={(newClips: EditorClip[]) => setEditorClips(newClips)}
               onClearEditor={() => {
                 setEditorClips([]);
                 setActiveEditorClipId(undefined);
+                setSubtitleClips([]);
+                setOverlayClips([]);
               }}
+              subtitleClips={subtitleClips}
+              onAddSubtitle={(sub) => setSubtitleClips((c) => [...c, sub])}
+              onUpdateSubtitle={(id, patch) => setSubtitleClips((c) => c.map((s) => (s.id === id ? { ...s, ...patch } : s)))}
+              onRemoveSubtitle={(id) => setSubtitleClips((c) => c.filter((s) => s.id !== id))}
+              overlayClips={overlayClips}
+              onAddOverlay={(ov) => setOverlayClips((c) => [...c, ov])}
+              onUpdateOverlay={(id, patch) => setOverlayClips((c) => c.map((o) => (o.id === id ? { ...o, ...patch } : o)))}
+              onRemoveOverlay={(id) => setOverlayClips((c) => c.filter((o) => o.id !== id))}
+              editorAspect={editorAspect}
+              onSetEditorAspect={setEditorAspect}
+              editorClipboardRef={editorClipboardRef}
             />}
           </section>
 
@@ -955,7 +1009,7 @@ function GrokShell() {
 
           {showMusicMiniPlayer ? (
             <div className="col-[1/-1] border-t border-white/6 bg-[linear-gradient(180deg,rgba(10,11,13,0.98),rgba(8,9,11,0.96))]">
-              <MusicMiniPlayer onExpand={() => { setAsciivisionActive(false); setPage("music"); }} />
+              <MusicMiniPlayer onExpand={() => { setAsciivisionActive(false); setPage("music"); }} onHide={() => setMiniPlayerHidden(true)} />
             </div>
           ) : null}
 
@@ -1017,11 +1071,9 @@ function TopBar({
   onToggleTerminal: () => void;
   onToggleAsciivision: () => void;
 }) {
-  const providerStatuses = useAppStore((state) => state.providerStatuses);
   const toggleSettings = useAppStore((state) => state.toggleSettings);
   const currentWindow = getCurrentWindow();
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
-  const xaiReady = providerStatuses.find((status) => status.providerId === "xai")?.configured;
   const navRef = useRef<HTMLDivElement>(null);
   const [navIndicator, setNavIndicator] = useState<{ left: number; width: number }>({ left: 0, width: 0 });
 
@@ -1090,12 +1142,7 @@ function TopBar({
         <div className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-xl border border-white/8 bg-white/5">
           <AppMark className="h-full w-full" />
         </div>
-        <div className="min-w-0">
-          <p className="truncate text-[12px] font-semibold tracking-[0.12em] text-stone-100">Super ASCIIVision</p>
-          <p className="truncate text-[10px] text-stone-500">
-            {xaiReady ? "xAI key ready" : "Add an xAI API key in settings"}
-          </p>
-        </div>
+        <p className="app-logo-text truncate text-[13px] font-bold tracking-[0.14em]">Super ASCIIVision</p>
       </div>
 
       <nav
@@ -1107,7 +1154,7 @@ function TopBar({
         data-no-drag="true"
       >
         <div
-          className="absolute inset-y-0.5 rounded-full bg-emerald-300/14 shadow-[0_0_0_1px_rgba(110,231,183,0.1),0_10px_22px_rgba(16,185,129,0.18)] transition-[left,width] duration-300 ease-out"
+          className="nav-indicator absolute inset-y-0.5 rounded-full transition-[left,width] duration-300 ease-out"
           style={{ left: navIndicator.left + 2, width: Math.max(navIndicator.width - 4, 0) }}
         />
         <NavTab pageId="chat" active={page === "chat"} onClick={() => onSelectPage("chat")}>
@@ -1183,12 +1230,11 @@ function TopBar({
       <button
         type="button"
         onClick={() => toggleSettings()}
-        className="inline-flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/5 px-2.5 py-1 text-[10px] text-stone-200 transition hover:bg-white/10"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/8 bg-white/5 text-stone-300 transition hover:bg-white/10 hover:text-stone-100"
         aria-label="Open settings"
         data-no-drag="true"
       >
         <Settings2 className="h-3.5 w-3.5" />
-        Settings
       </button>
       {showCloseConfirm ? (
         <div
@@ -1511,8 +1557,20 @@ function CenterStage({
   onSelectEditorClip,
   onUpdateEditorClip,
   onRemoveEditorClip,
-  onMoveEditorClip,
+  onAddEditorClip,
+  onReorderClips,
   onClearEditor,
+  subtitleClips,
+  onAddSubtitle,
+  onUpdateSubtitle,
+  onRemoveSubtitle,
+  overlayClips,
+  onAddOverlay,
+  onUpdateOverlay,
+  onRemoveOverlay,
+  editorAspect,
+  onSetEditorAspect,
+  editorClipboardRef,
 }: {
   page: AppPage;
   onNavigate: (page: AppPage) => void;
@@ -1522,8 +1580,20 @@ function CenterStage({
   onSelectEditorClip: (clipId?: string) => void;
   onUpdateEditorClip: (clipId: string, patch: Partial<EditorClip>) => void;
   onRemoveEditorClip: (clipId: string) => void;
-  onMoveEditorClip: (clipId: string, direction: "up" | "down") => void;
+  onAddEditorClip: (clip: EditorClip) => void;
+  onReorderClips: (clips: EditorClip[]) => void;
   onClearEditor: () => void;
+  subtitleClips: SubtitleClip[];
+  onAddSubtitle: (sub: SubtitleClip) => void;
+  onUpdateSubtitle: (id: string, patch: Partial<SubtitleClip>) => void;
+  onRemoveSubtitle: (id: string) => void;
+  overlayClips: OverlayClip[];
+  onAddOverlay: (ov: OverlayClip) => void;
+  onUpdateOverlay: (id: string, patch: Partial<OverlayClip>) => void;
+  onRemoveOverlay: (id: string) => void;
+  editorAspect: "landscape" | "vertical";
+  onSetEditorAspect: (aspect: "landscape" | "vertical") => void;
+  editorClipboardRef: React.MutableRefObject<EditorClip | null>;
 }) {
   let content: React.ReactNode;
   if (page === "tiles") {
@@ -1540,8 +1610,20 @@ function CenterStage({
         onSelectClip={onSelectEditorClip}
         onUpdateClip={onUpdateEditorClip}
         onRemoveClip={onRemoveEditorClip}
-        onMoveClip={onMoveEditorClip}
+        onAddClip={onAddEditorClip}
+        onReorderClips={onReorderClips}
         onClear={onClearEditor}
+        subtitleClips={subtitleClips}
+        onAddSubtitle={onAddSubtitle}
+        onUpdateSubtitle={onUpdateSubtitle}
+        onRemoveSubtitle={onRemoveSubtitle}
+        overlayClips={overlayClips}
+        onAddOverlay={onAddOverlay}
+        onUpdateOverlay={onUpdateOverlay}
+        onRemoveOverlay={onRemoveOverlay}
+        editorAspect={editorAspect}
+        onSetEditorAspect={onSetEditorAspect}
+        clipboardRef={editorClipboardRef}
       />
     );
   } else if (page === "ide") {
@@ -2948,17 +3030,24 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
         : new WebSocket(session.websocketUrl, [`openai-insecure-api-key.${session.clientSecret}`]);
       websocketRef.current = socket;
 
-      socket.onopen = async () => {
-        setRealtimeStatus(talkModeRef.current === "push" ? "Hold mic to talk" : "Listening");
+      const sessionConfiguredRef2 = { current: false };
+
+      const sendSessionUpdate = () => {
         const sessionConfig: Record<string, unknown> = {
-          modalities: ["text", "audio"],
           instructions: realtimeInstructions,
           voice: normalizeVoiceId(voiceName),
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
+          audio: {
+            input: { format: { type: "audio/pcm", rate: REALTIME_AUDIO_RATE } },
+            output: { format: { type: "audio/pcm", rate: REALTIME_AUDIO_RATE } },
+          },
         };
         if (talkModeRef.current === "auto") {
-          sessionConfig.turn_detection = { type: "server_vad" };
+          sessionConfig.turn_detection = {
+            type: "server_vad",
+            threshold: 0.85,
+            silence_duration_ms: 800,
+            prefix_padding_ms: 333,
+          };
         } else {
           sessionConfig.turn_detection = null;
         }
@@ -2968,7 +3057,9 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
             session: sessionConfig,
           }),
         );
+      };
 
+      const startAudioCapture = async () => {
         const captureContext = new AudioContext({ sampleRate: REALTIME_AUDIO_RATE });
         captureContextRef.current = captureContext;
         if (captureContext.state === "suspended") {
@@ -2992,7 +3083,7 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
         silentGainRef.current = silentGain;
 
         processor.onaudioprocess = (event) => {
-          if (socket.readyState !== WebSocket.OPEN) {
+          if (socket.readyState !== WebSocket.OPEN || !sessionConfiguredRef2.current) {
             return;
           }
           // In push-to-talk mode, only send audio while the button is held
@@ -3009,6 +3100,12 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
         };
       };
 
+      socket.onopen = () => {
+        setRealtimeStatus("Connecting…");
+        // Send session config immediately — xAI accepts it on open
+        sendSessionUpdate();
+      };
+
       socket.onmessage = (event) => {
         const payload = typeof event.data === "string" ? event.data : "";
         if (!payload) {
@@ -3023,8 +3120,18 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
         }
 
         const type = typeof data.type === "string" ? data.type : "";
+        if (type === "conversation.created") {
+          // xAI sends this first — if we haven't configured yet, send session.update now
+          return;
+        }
+        if (type === "session.created") {
+          // Some xAI flows send session.created — send config if not already sent
+          return;
+        }
         if (type === "session.updated") {
+          sessionConfiguredRef2.current = true;
           setRealtimeStatus(talkModeRef.current === "push" ? "Hold mic to talk" : "Listening");
+          void startAudioCapture();
           return;
         }
         if (type === "input_audio_buffer.speech_started") {
@@ -3076,11 +3183,11 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
 
       socket.onclose = (closeEvent) => {
         setVoiceActive(false);
-        if (closeEvent.code !== 1000) {
+        if (closeEvent.code !== 1000 && closeEvent.code !== 1005) {
           setRealtimeStatus(
             closeEvent.reason
-              ? `Disconnected: ${closeEvent.reason} (${closeEvent.code})`
-              : `Disconnected (code ${closeEvent.code})`,
+              ? `Disconnected: ${closeEvent.reason}`
+              : "Disconnected",
           );
         } else {
           setRealtimeStatus("Idle");
@@ -3151,12 +3258,9 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
           </div>
 
           <div className="mt-4 grid gap-2">
-            <input
-              value={mode === "speech" ? ttsModel : realtimeModel}
-              onChange={(event) => (mode === "speech" ? setTtsModel(event.target.value) : setRealtimeModel(event.target.value))}
-              placeholder={mode === "speech" ? "TTS model id" : "Realtime model id"}
-              className="rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-200 outline-none focus:border-sky-300/40"
-            />
+            <div className="rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-400">
+              Model: {mode === "speech" ? ttsModel : realtimeModel}
+            </div>
             <div className="flex flex-wrap gap-1.5">
               {XAI_VOICE_OPTIONS.map((voice) => (
                 <button
@@ -3399,13 +3503,6 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
                     <p className="text-[10px] uppercase tracking-[0.3em] text-[#84a09b]">Audio Gallery</p>
                     <p className="mt-1 text-[11px] text-stone-500">Compact audio tiles with hover controls</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={onShowBrowser}
-                    className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-200 transition hover:bg-white/10"
-                  >
-                    Open Browser Pane
-                  </button>
                 </div>
               </div>
               <div
@@ -3485,6 +3582,108 @@ function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
   );
 }
 
+function IdeCodeEditor({
+  content,
+  language,
+  onChange,
+}: {
+  content: string;
+  language?: string;
+  onChange: (value: string) => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const preRef = useRef<HTMLPreElement>(null);
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const lines = content.split("\n");
+  const lineCount = lines.length;
+
+  const highlighted = useMemo(() => {
+    const lang = (language ?? "").toLowerCase();
+    const aliases: Record<string, string> = {
+      js: "javascript", mjs: "javascript", ts: "typescript", tsx: "typescript",
+      rs: "rust", py: "python", md: "markdown", yml: "yaml", htm: "html",
+    };
+    const resolved = aliases[lang] ?? lang;
+    try {
+      if (resolved && hljs.getLanguage(resolved)) {
+        return hljs.highlight(content, { language: resolved }).value;
+      }
+    } catch {
+      // fallback
+    }
+    try {
+      return hljs.highlightAuto(content).value;
+    } catch {
+      return content.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+  }, [content, language]);
+
+  const syncScroll = () => {
+    if (textareaRef.current && preRef.current) {
+      preRef.current.scrollTop = textareaRef.current.scrollTop;
+      preRef.current.scrollLeft = textareaRef.current.scrollLeft;
+    }
+    if (textareaRef.current && gutterRef.current) {
+      gutterRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
+  };
+
+  // Handle Tab key for indentation
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const ta = e.currentTarget;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const newValue = `${content.substring(0, start)}  ${content.substring(end)}`;
+      onChange(newValue);
+      requestAnimationFrame(() => {
+        ta.selectionStart = start + 2;
+        ta.selectionEnd = start + 2;
+      });
+    }
+  };
+
+  return (
+    <div className="relative flex h-full overflow-hidden rounded-[14px] border border-white/6 bg-[#050607]">
+      {/* Line numbers gutter */}
+      <div
+        ref={gutterRef}
+        className="flex-none select-none overflow-hidden border-r border-white/6 bg-[#060708] py-3 pr-2 text-right font-['IBM_Plex_Mono'] text-[10px] leading-[20px] text-stone-600"
+        style={{ width: `${Math.max(36, String(lineCount).length * 8 + 20)}px` }}
+      >
+        {Array.from({ length: lineCount }, (_, i) => (
+          <div key={i} className="px-2">{i + 1}</div>
+        ))}
+      </div>
+
+      {/* Code display area */}
+      <div className="relative min-w-0 flex-1">
+        {/* Highlighted code layer */}
+        <pre
+          ref={preRef}
+          className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre px-4 py-3 font-['IBM_Plex_Mono'] text-[11px] leading-[20px] text-stone-100"
+          aria-hidden="true"
+        >
+          <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+        </pre>
+
+        {/* Editable textarea layer (transparent text, visible caret) */}
+        <textarea
+          ref={textareaRef}
+          value={content}
+          onChange={(e) => onChange(e.target.value)}
+          onScroll={syncScroll}
+          onKeyDown={handleKeyDown}
+          spellCheck={false}
+          className="relative z-10 h-full w-full resize-none whitespace-pre bg-transparent px-4 py-3 font-['IBM_Plex_Mono'] text-[11px] leading-[20px] text-transparent caret-emerald-300 outline-none"
+          style={{ caretColor: "#6ee7b7" }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const chrome = useContext(ShellChromeContext);
   const settings = useAppStore((state) => state.settings);
@@ -3496,15 +3695,17 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const scanWorkspace = useAppStore((state) => state.scanWorkspace);
   const createWorkspaceFromFolder = useAppStore((state) => state.createWorkspaceFromFolder);
   const deleteWorkspace = useAppStore((state) => state.deleteWorkspace);
-  const browserDraftUrl = useAppStore((state) => state.browserDraftUrl);
-  const detectedServerUrl = useAppStore((state) => state.detectedServerUrl);
-  const setBrowserDraftUrl = useAppStore((state) => state.setBrowserDraftUrl);
-  const openBrowserUrl = useAppStore((state) => state.openBrowserUrl);
-  const [leftMode, setLeftMode] = useState<"explorer" | "workspace" | "browser">("explorer");
+  const [leftMode, setLeftMode] = useState<"explorer" | "workspace">("explorer");
   const [query, setQuery] = useState("");
   const [activeFilePath, setActiveFilePath] = useState<string>();
-  const [fileContent, setFileContent] = useState("");
-  const [savedContent, setSavedContent] = useState("");
+  const [openTabs, setOpenTabs] = useState<string[]>([]);
+  const [tabContents, setTabContents] = useState<Record<string, { content: string; saved: string }>>({});
+  const fileContent = activeFilePath ? tabContents[activeFilePath]?.content ?? "" : "";
+  const savedContent = activeFilePath ? tabContents[activeFilePath]?.saved ?? "" : "";
+  const setFileContent = (content: string) => {
+    if (!activeFilePath) return;
+    setTabContents((prev) => ({ ...prev, [activeFilePath]: { ...prev[activeFilePath]!, content } }));
+  };
   const [loadingFile, setLoadingFile] = useState(false);
   const [savingFile, setSavingFile] = useState(false);
   const [previewMode, setPreviewMode] = useState<"code" | "preview">("code");
@@ -3587,16 +3788,18 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   }, [activeWorkspaceId]);
 
   useEffect(() => {
-    if (!filteredItems.length) {
+    if (!filteredItems.length && !openTabs.length) {
       setActiveFilePath(undefined);
-      setFileContent("");
-      setSavedContent("");
       return;
     }
     if (!activeFilePath || !workspaceItems.some((item) => item.path === activeFilePath)) {
-      setActiveFilePath(filteredItems[0]?.path);
+      if (openTabs.length) {
+        setActiveFilePath(openTabs[openTabs.length - 1]);
+      } else if (filteredItems[0]) {
+        handleSelectFile(filteredItems[0].path);
+      }
     }
-  }, [activeFilePath, filteredItems, workspaceItems]);
+  }, [activeFilePath, filteredItems, workspaceItems, openTabs]);
 
   useEffect(() => {
     if (!tree.length) {
@@ -3617,20 +3820,23 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     if (!activeFilePath) {
       return;
     }
+    // If we already have content for this tab, don't reload
+    if (tabContents[activeFilePath]) {
+      setLoadingFile(false);
+      return;
+    }
     let cancelled = false;
     setLoadingFile(true);
     void api
       .readWorkspaceTextFile(activeFilePath)
       .then((content) => {
         if (!cancelled) {
-          setFileContent(content);
-          setSavedContent(content);
+          setTabContents((prev) => ({ ...prev, [activeFilePath]: { content, saved: content } }));
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setFileContent("");
-          setSavedContent("");
+          setTabContents((prev) => ({ ...prev, [activeFilePath]: { content: "", saved: "" } }));
         }
       })
       .finally(() => {
@@ -3696,21 +3902,79 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     };
   }, [contextMenu]);
 
+  // Keyboard shortcuts: Cmd+S save, Cmd+P quick open
+  const [quickOpenVisible, setQuickOpenVisible] = useState(false);
+  const [quickOpenQuery, setQuickOpenQuery] = useState("");
+  const [quickOpenIndex, setQuickOpenIndex] = useState(0);
+  const quickOpenResults = useMemo(() => {
+    const q = quickOpenQuery.trim().toLowerCase();
+    if (!q) return workspaceItems.slice(0, 30);
+    return workspaceItems
+      .filter((item) => item.path.toLowerCase().includes(q) || leafName(item.path).toLowerCase().includes(q))
+      .slice(0, 30);
+  }, [quickOpenQuery, workspaceItems]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        if (activeFilePath && fileContent !== savedContent) {
+          void handleSave();
+        }
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "p") {
+        e.preventDefault();
+        setQuickOpenVisible((v) => !v);
+        setQuickOpenQuery("");
+        setQuickOpenIndex(0);
+      }
+      if (e.key === "Escape" && quickOpenVisible) {
+        setQuickOpenVisible(false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeFilePath, fileContent, savedContent, quickOpenVisible]);
+
   const handleSelectFile = (path: string) => {
-    if (dirty && path !== activeFilePath && !window.confirm("Discard unsaved IDE changes?")) {
+    setActiveFilePath(path);
+    setOpenTabs((tabs) => (tabs.includes(path) ? tabs : [...tabs, path]));
+  };
+
+  const handleCloseTab = (path: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const tabEntry = tabContents[path];
+    if (tabEntry && tabEntry.content !== tabEntry.saved && !window.confirm("Discard unsaved changes?")) {
       return;
     }
-    setActiveFilePath(path);
+    setOpenTabs((tabs) => {
+      const next = tabs.filter((t) => t !== path);
+      if (activeFilePath === path) {
+        const idx = tabs.indexOf(path);
+        const nextActive = next[Math.min(idx, next.length - 1)];
+        setActiveFilePath(nextActive);
+      }
+      return next;
+    });
+    setTabContents((prev) => {
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
   };
 
   const handleSave = async () => {
     if (!activeFilePath) {
       return;
     }
+    const currentContent = tabContents[activeFilePath]?.content ?? "";
     setSavingFile(true);
     try {
-      await api.writeWorkspaceTextFile(activeFilePath, fileContent);
-      setSavedContent(fileContent);
+      await api.writeWorkspaceTextFile(activeFilePath, currentContent);
+      setTabContents((prev) => ({
+        ...prev,
+        [activeFilePath]: { content: currentContent, saved: currentContent },
+      }));
       if (activeWorkspaceId) {
         await selectWorkspace(activeWorkspaceId);
       }
@@ -3737,10 +4001,6 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
       return;
     }
 
-    if (dirty && !window.confirm("Discard unsaved IDE changes and create a new file here?")) {
-      return;
-    }
-
     const nextName = window.prompt("New file name", "new-file.ts")?.trim();
     if (!nextName) {
       return;
@@ -3754,8 +4014,9 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     await api.createWorkspaceTextFile(nextPath, "");
     setOpenFolders((current) => ({ ...current, [node.id]: true }));
     setPreviewMode("code");
-    setFileContent("");
-    setSavedContent("");
+    setTabContents((prev) => ({ ...prev, [nextPath]: { content: "", saved: "" } }));
+    setOpenTabs((tabs) => (tabs.includes(nextPath) ? tabs : [...tabs, nextPath]));
+    setActiveFilePath(nextPath);
     await refreshWorkspaceAfterMutation(activeWorkspaceId, nextPath);
   };
 
@@ -3779,6 +4040,19 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     await refreshWorkspaceAfterMutation(activeWorkspaceId, nextActivePath, nextRoots);
   };
 
+  const cleanupTabsForPath = (deletedPath: string) => {
+    setOpenTabs((tabs) => tabs.filter((t) => t !== deletedPath && !t.startsWith(`${deletedPath}/`)));
+    setTabContents((prev) => {
+      const next = { ...prev };
+      for (const key of Object.keys(next)) {
+        if (key === deletedPath || key.startsWith(`${deletedPath}/`)) {
+          delete next[key];
+        }
+      }
+      return next;
+    });
+  };
+
   const handleDeleteNode = async (node: IdeTreeNode) => {
     if (!activeWorkspaceId || !activeWorkspace) {
       return;
@@ -3792,11 +4066,10 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     const deletingWorkspaceRoot = activeWorkspace.roots.includes(node.path);
     if (deletingWorkspaceRoot) {
       await api.deleteWorkspacePath(node.path);
+      cleanupTabsForPath(node.path);
       if (activeWorkspace.roots.length <= 1) {
         await deleteWorkspace(activeWorkspaceId);
         setActiveFilePath(undefined);
-        setFileContent("");
-        setSavedContent("");
         return;
       }
 
@@ -3810,14 +4083,11 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     }
 
     await api.deleteWorkspacePath(node.path);
+    cleanupTabsForPath(node.path);
     const nextActivePath =
       activeFilePath && (activeFilePath === node.path || activeFilePath.startsWith(`${node.path}/`))
         ? undefined
         : activeFilePath;
-    if (!nextActivePath) {
-      setFileContent("");
-      setSavedContent("");
-    }
     await refreshWorkspaceAfterMutation(activeWorkspaceId, nextActivePath);
   };
 
@@ -3829,6 +4099,39 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     }
     const escapedPath = node.path.replace(/'/g, "'\\''");
     await writeTerminalData(`cd '${escapedPath}'\n`);
+  };
+
+  const handleApplyCode = (code: string) => {
+    if (!activeFilePath) {
+      window.alert("Open a file first to apply code.");
+      return;
+    }
+    setPreviewMode("code");
+    setTabContents((prev) => ({
+      ...prev,
+      [activeFilePath]: { ...prev[activeFilePath]!, content: code },
+    }));
+  };
+
+  const handleCreateFileFromAssistant = async (code: string) => {
+    if (!activeWorkspaceId || !activeWorkspace) {
+      window.alert("Open a workspace first.");
+      return;
+    }
+    const fileName = window.prompt("New file name", "new-file.ts")?.trim();
+    if (!fileName) return;
+    const root = activeWorkspace.roots[0];
+    if (!root) return;
+    const newPath = `${root.replace(/\/+$/, "")}/${fileName}`;
+    await api.createWorkspaceTextFile(newPath, code);
+    setTabContents((prev) => ({ ...prev, [newPath]: { content: code, saved: code } }));
+    setOpenTabs((tabs) => (tabs.includes(newPath) ? tabs : [...tabs, newPath]));
+    setActiveFilePath(newPath);
+    await refreshWorkspaceAfterMutation(activeWorkspaceId, newPath);
+  };
+
+  const handleRunInTerminal = async (command: string) => {
+    await writeTerminalData(`${command}\n`);
   };
 
   const sendAssistantMessage = async () => {
@@ -3846,9 +4149,20 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
       setAssistantConversationId(conversation.id);
     }
 
-    const prompt = activeItem
-      ? `You are helping inside Super ASCIIVision IDE.\nCurrent file: ${activeItem.path}\nLanguage: ${activeItem.languageHint ?? "text"}\n\nCurrent file contents:\n\`\`\`${extensionForLanguage(activeItem.languageHint ?? undefined)}\n${fileContent}\n\`\`\`\n\nUser request:\n${trimmed}`
-      : trimmed;
+    const systemParts = [
+      "You are an agentic coding assistant inside Super ASCIIVision IDE.",
+      "When the user asks you to write or modify code, respond with the COMPLETE file contents in a fenced code block.",
+      "When suggesting terminal commands, wrap them in a ```bash code block.",
+      "Be concise and focused. Prefer showing code over explaining it.",
+    ];
+    if (activeItem) {
+      systemParts.push(
+        `Current file: ${activeItem.path}`,
+        `Language: ${activeItem.languageHint ?? "text"}`,
+        `\nCurrent file contents:\n\`\`\`${extensionForLanguage(activeItem.languageHint ?? undefined)}\n${fileContent}\n\`\`\``,
+      );
+    }
+    const prompt = `${systemParts.join("\n")}\n\nUser request:\n${trimmed}`;
 
     setAssistantMessages((current) => [
       ...current,
@@ -3965,26 +4279,24 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
         </div>
       </div>
 
-      {activeWorkspaceId ? (
-        <div
-          className="grid min-h-0 flex-1 overflow-hidden"
-          style={{
-            gridTemplateColumns: `54px ${clampedIdeLeftWidth}px 8px minmax(0,1fr) 8px ${clampedIdeRightWidth}px`,
-          }}
-        >
+      <div
+        className="grid min-h-0 flex-1 overflow-hidden"
+        style={{
+          gridTemplateColumns: `54px ${clampedIdeLeftWidth}px 8px minmax(0,1fr) 8px ${clampedIdeRightWidth}px`,
+        }}
+      >
           <aside className="flex min-h-0 flex-col items-center gap-2 border-r border-white/6 bg-[rgba(8,9,11,0.96)] px-2 py-3">
             {(
               [
                 ["explorer", Files, "Files"],
                 ["workspace", FolderPlus, "Workspace"],
-                ["browser", Globe, "Browser"],
               ] as const
             ).map(([mode, Icon, label]) => (
               <button
                 key={mode}
                 type="button"
                 title={label}
-                onClick={() => setLeftMode(mode as "explorer" | "workspace" | "browser")}
+                onClick={() => setLeftMode(mode as "explorer" | "workspace")}
                 className={clsx(
                   "inline-flex h-10 w-10 items-center justify-center rounded-2xl border transition",
                   leftMode === mode
@@ -3999,21 +4311,31 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
 
           <aside className="flex min-h-0 flex-col overflow-hidden border-r border-white/6 bg-[rgba(10,11,13,0.96)]">
             <div className="border-b border-white/6 px-3 py-3">
-              <p className="text-[10px] uppercase tracking-[0.28em] text-[#84a09b]">
-                {leftMode === "explorer" ? "Explorer" : leftMode === "workspace" ? "Workspaces" : "Browser"}
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] uppercase tracking-[0.28em] text-[#84a09b]">
+                  {leftMode === "explorer" ? "Explorer" : "Workspaces"}
+                </p>
+                {leftMode === "explorer" ? (
+                  <button
+                    type="button"
+                    onClick={() => void createWorkspaceFromFolder()}
+                    title="Add Folder"
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-stone-400 transition hover:bg-white/8 hover:text-stone-100"
+                  >
+                    <FolderPlus className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
+              </div>
               <p className="mt-1 text-[11px] text-stone-500">
                 {leftMode === "explorer"
                   ? `${workspaceItems.length} indexed files`
-                  : leftMode === "workspace"
-                    ? "Switch active project roots"
-                    : "Open preview routes and local URLs"}
+                  : "Switch active project roots"}
               </p>
               {leftMode === "explorer" ? (
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Filter files"
+                  placeholder="Filter files · ⌘P quick open"
                   className="mt-3 w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none placeholder:text-stone-600 focus:border-emerald-300/35"
                 />
               ) : null}
@@ -4030,7 +4352,7 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                     body="Rescan the workspace or choose a different folder to populate the IDE explorer."
                   />
                 )
-              ) : leftMode === "workspace" ? (
+              ) : (
                 <div className="space-y-3">
                   <button
                     type="button"
@@ -4042,62 +4364,39 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                   </button>
                   <div className="space-y-1.5">
                   {workspaces.map((workspace) => (
-                    <button
+                    <div
                       key={workspace.id}
-                      type="button"
-                      onClick={() => void selectWorkspace(workspace.id)}
-                      className={clsx(
-                        "w-full rounded-xl border px-3 py-2 text-left transition",
-                        workspace.id === activeWorkspaceId
-                          ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"
-                          : "border-transparent bg-white/[0.03] text-stone-300 hover:border-white/8 hover:bg-white/[0.05]",
-                      )}
+                      className="group relative"
                     >
-                      <p className="truncate text-[11px] font-medium text-stone-100">{workspace.name}</p>
-                      <p className="mt-1 text-[9px] text-stone-500">{workspace.itemCount} indexed files</p>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => void selectWorkspace(workspace.id)}
+                        className={clsx(
+                          "w-full rounded-xl border px-3 py-2 text-left transition",
+                          workspace.id === activeWorkspaceId
+                            ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-50"
+                            : "border-transparent bg-white/[0.03] text-stone-300 hover:border-white/8 hover:bg-white/[0.05]",
+                        )}
+                      >
+                        <p className="truncate text-[11px] font-medium text-stone-100">{workspace.name}</p>
+                        <p className="mt-1 text-[9px] text-stone-500">{workspace.itemCount} indexed files</p>
+                      </button>
+                      <button
+                        type="button"
+                        title="Remove workspace"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Remove workspace "${workspace.name}"?`)) {
+                            void deleteWorkspace(workspace.id);
+                          }
+                        }}
+                        className="absolute right-2 top-2 hidden h-5 w-5 items-center justify-center rounded-lg text-stone-500 transition hover:bg-rose-500/15 hover:text-rose-300 group-hover:flex"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
                   ))}
                   </div>
-                </div>
-              ) : (
-                <div className="space-y-3 px-1 py-1">
-                  <label className="block text-[10px] text-stone-400">
-                    <span className="mb-1.5 block uppercase tracking-[0.2em]">Browser URL</span>
-                    <input
-                      value={browserDraftUrl}
-                      onChange={(event) => setBrowserDraftUrl(event.target.value)}
-                      className="w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none focus:border-sky-300/40"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => openBrowserUrl()}
-                    className="inline-flex w-full items-center justify-center gap-1 rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-200 transition hover:bg-white/10"
-                  >
-                    <Globe className="h-3 w-3" />
-                    Open URL
-                  </button>
-                  {detectedServerUrl ? (
-                    <button
-                      type="button"
-                      onClick={() => openBrowserUrl(detectedServerUrl)}
-                      className="inline-flex w-full items-center justify-center gap-1 rounded-xl border border-sky-300/18 bg-sky-300/10 px-3 py-2 text-[10px] text-sky-100 transition hover:bg-sky-300/16"
-                    >
-                      Use detected localhost
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      chrome?.openBrowserPreview(buildPreviewDocument(fileContent, activeItem?.languageHint ?? undefined));
-                      onShowBrowser();
-                    }}
-                    disabled={!activeItem}
-                    className="inline-flex w-full items-center justify-center gap-1 rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:text-stone-500"
-                  >
-                    <Eye className="h-3 w-3" />
-                    Open Current Preview
-                  </button>
                 </div>
               )}
             </div>
@@ -4110,44 +4409,93 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
             }
           />
 
-          <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden bg-[linear-gradient(180deg,rgba(8,9,11,0.99),rgba(6,7,9,0.98))]">
-            <div className="flex items-center justify-between gap-3 border-b border-white/6 px-3 py-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <div className="inline-flex min-w-0 items-center gap-2 rounded-t-2xl border border-b-0 border-white/8 bg-white/[0.04] px-3 py-2">
-                  <Code2 className="h-3.5 w-3.5 text-stone-400" />
-                  <span className="truncate text-[11px] text-stone-100">
-                    {activeItem ? leafName(activeItem.path) : "untitled"}
-                  </span>
-                  {dirty ? <span className="h-1.5 w-1.5 rounded-full bg-amber-300" /> : null}
-                </div>
-                <p className="truncate font-['IBM_Plex_Mono'] text-[10px] text-stone-500">
-                  {activeItem?.path ?? "Select a file from the explorer"}
-                </p>
+          <section className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden bg-[linear-gradient(180deg,rgba(8,9,11,0.99),rgba(6,7,9,0.98))]">
+            {/* Tab bar */}
+            <div className="flex items-center gap-0 overflow-x-auto border-b border-white/6 bg-[rgba(6,7,9,0.98)]" style={{ scrollbarWidth: "none" }}>
+              {openTabs.map((tabPath) => {
+                const isActive = tabPath === activeFilePath;
+                const tabEntry = tabContents[tabPath];
+                const tabDirty = tabEntry ? tabEntry.content !== tabEntry.saved : false;
+                return (
+                  <button
+                    key={tabPath}
+                    type="button"
+                    onClick={() => setActiveFilePath(tabPath)}
+                    className={clsx(
+                      "group relative flex min-w-0 max-w-[180px] items-center gap-1.5 border-r border-white/4 px-3 py-2 text-[10px] transition",
+                      isActive
+                        ? "bg-[#0d0e10] text-stone-100"
+                        : "bg-transparent text-stone-500 hover:bg-white/[0.03] hover:text-stone-300",
+                    )}
+                  >
+                    {isActive ? <div className="absolute inset-x-0 top-0 h-[2px] bg-emerald-400/60" /> : null}
+                    <Code2 className="h-3 w-3 shrink-0 text-stone-500" />
+                    <span className="truncate">{leafName(tabPath)}</span>
+                    {tabDirty ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-300" /> : null}
+                    <span
+                      onClick={(e) => handleCloseTab(tabPath, e)}
+                      className="ml-auto hidden h-4 w-4 shrink-0 items-center justify-center rounded text-stone-500 hover:bg-white/10 hover:text-stone-200 group-hover:flex"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </span>
+                  </button>
+                );
+              })}
+              {!openTabs.length ? (
+                <p className="px-3 py-2 text-[10px] text-stone-600">No files open</p>
+              ) : null}
+            </div>
+
+            {/* Breadcrumbs + toolbar */}
+            <div className="flex items-center justify-between gap-3 border-b border-white/6 px-3 py-1.5">
+              <div className="flex min-w-0 items-center gap-1 text-[10px] text-stone-500">
+                {activeItem ? (
+                  relativeWorkspacePath(activeItem.path, activeWorkspace?.roots ?? [])
+                    .split("/")
+                    .map((segment, i, arr) => (
+                      <span key={i} className="flex items-center gap-1">
+                        {i > 0 ? <ChevronRight className="h-2.5 w-2.5 text-stone-600" /> : null}
+                        <span className={i === arr.length - 1 ? "text-stone-300" : ""}>{segment}</span>
+                      </span>
+                    ))
+                ) : (
+                  <span>Select a file from the explorer</span>
+                )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => void navigator.clipboard.writeText(activeItem?.path ?? "")}
                   disabled={!activeItem}
-                  className="inline-flex items-center gap-1 rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:text-stone-500"
+                  title="Copy path"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-stone-400 transition hover:bg-white/8 hover:text-stone-100 disabled:text-stone-600"
                 >
                   <Copy className="h-3 w-3" />
-                  Path
                 </button>
                 <button
                   type="button"
                   onClick={() => setPreviewMode((current) => (current === "preview" ? "code" : "preview"))}
                   disabled={!activeItem}
-                  className="inline-flex items-center gap-1 rounded-xl border border-sky-300/18 bg-sky-300/10 px-3 py-2 text-[10px] text-sky-100 transition hover:bg-sky-300/16 disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/5 disabled:text-stone-500"
+                  title={previewMode === "preview" ? "Show code" : "Show preview"}
+                  className={clsx(
+                    "inline-flex h-6 w-6 items-center justify-center rounded-lg transition disabled:text-stone-600",
+                    previewMode === "preview" ? "bg-sky-300/15 text-sky-300" : "text-stone-400 hover:bg-white/8 hover:text-stone-100",
+                  )}
                 >
                   <Eye className="h-3 w-3" />
-                  {previewMode === "preview" ? "Code" : "Preview"}
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleSave()}
                   disabled={!activeItem || !dirty || savingFile}
-                  className="inline-flex items-center gap-1 rounded-xl border border-emerald-300/20 bg-emerald-300/12 px-3 py-2 text-[10px] text-emerald-50 transition hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/5 disabled:text-stone-500"
+                  title="Save (⌘S)"
+                  className={clsx(
+                    "inline-flex h-6 items-center gap-1 rounded-lg px-2 text-[10px] transition",
+                    dirty
+                      ? "bg-emerald-300/15 text-emerald-300 hover:bg-emerald-300/20"
+                      : "text-stone-500",
+                    (!activeItem || savingFile) && "cursor-not-allowed opacity-40",
+                  )}
                 >
                   <Save className="h-3 w-3" />
                   {savingFile ? "Saving…" : dirty ? "Save" : "Saved"}
@@ -4155,7 +4503,8 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
               </div>
             </div>
 
-            <div className="min-h-0 bg-[#070809] p-3">
+            {/* Editor area */}
+            <div className="min-h-0 bg-[#070809]">
               {activeItem ? (
                 loadingFile ? (
                   <div className="flex h-full items-center justify-center text-[11px] text-stone-500">Loading file…</div>
@@ -4164,43 +4513,52 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                     title="IDE preview"
                     srcDoc={buildPreviewDocument(fileContent, activeItem?.languageHint ?? undefined)}
                     sandbox="allow-scripts allow-same-origin"
-                    className="h-full w-full rounded-[18px] border border-white/8 bg-[#050607]"
+                    className="h-full w-full border-0 bg-[#050607]"
                   />
                 ) : (
-                  <textarea
-                    value={fileContent}
-                    onChange={(event) => setFileContent(event.target.value)}
-                    spellCheck={false}
-                    className="h-full w-full resize-none rounded-[18px] border border-white/8 bg-[#050607] px-4 py-4 font-['IBM_Plex_Mono'] text-[11px] leading-6 text-stone-100 outline-none"
+                  <IdeCodeEditor
+                    content={fileContent}
+                    language={activeItem.languageHint ?? undefined}
+                    onChange={setFileContent}
                   />
                 )
               ) : (
                 <EmptyPanel
                   eyebrow="IDE"
-                  title="Select a file from the explorer."
-                  body="Use the left rail to switch between project files, workspace roots, and the browser tools."
+                  title={activeWorkspaceId ? "Select a file from the explorer." : "Open a folder to get started."}
+                  body={activeWorkspaceId
+                    ? "Use the left rail to switch between project files and workspace roots. Press ⌘P for quick open."
+                    : "Click \"Open Folder\" above or use the left sidebar to add a workspace. Your files will appear in the explorer."}
                 />
               )}
             </div>
 
-            <div className="flex items-center justify-between gap-3 border-t border-white/6 px-3 py-2 text-[10px] text-stone-500">
+            {/* Status bar */}
+            <div className="flex items-center justify-between gap-3 border-t border-white/6 px-3 py-1.5 text-[9px] text-stone-500">
               <div className="flex items-center gap-3">
-                <span>{activeItem?.languageHint ?? "text"}</span>
-                <span>{activeItem ? formatFileSize(activeItem.byteSize) : "No file selected"}</span>
-                {dirty ? <span className="text-amber-200">Unsaved changes</span> : <span>Saved</span>}
+                <span className="inline-flex items-center gap-1 rounded bg-white/[0.04] px-1.5 py-0.5">
+                  {activeItem?.languageHint ?? "text"}
+                </span>
+                <span>{activeItem ? formatFileSize(activeItem.byteSize) : "No file"}</span>
+                <span>{fileContent.split("\n").length} lines</span>
+                {dirty ? <span className="text-amber-300">Modified</span> : <span className="text-stone-600">Saved</span>}
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  chrome?.openBrowserPreview(buildPreviewDocument(fileContent, activeItem?.languageHint ?? undefined));
-                  onShowBrowser();
-                }}
-                disabled={!activeItem}
-                className="inline-flex items-center gap-1 text-stone-400 transition hover:text-stone-100 disabled:cursor-not-allowed disabled:text-stone-600"
-              >
-                <Globe className="h-3 w-3" />
-                Open in browser
-              </button>
+              <div className="flex items-center gap-3">
+                <span>UTF-8</span>
+                <span>{openTabs.length} open</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    chrome?.openBrowserPreview(buildPreviewDocument(fileContent, activeItem?.languageHint ?? undefined));
+                    onShowBrowser();
+                  }}
+                  disabled={!activeItem}
+                  className="inline-flex items-center gap-1 text-stone-400 transition hover:text-stone-100 disabled:text-stone-600"
+                >
+                  <Globe className="h-2.5 w-2.5" />
+                  Preview
+                </button>
+              </div>
             </div>
           </section>
 
@@ -4245,55 +4603,53 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
               <BrowserPanel />
             ) : (
               <>
-                <div className="border-b border-white/6 px-3 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-[#84a09b]">Assistant</p>
-                      <h3 className="mt-1 text-[13px] font-semibold text-stone-100">AI Copilot</h3>
-                      <p className="mt-1 text-[10px] leading-5 text-stone-500">
-                        Ask about the open file, then apply the answer directly into the editor.
-                      </p>
+                {/* Model selector row */}
+                <div className="border-b border-white/6 px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <Bot className="h-3.5 w-3.5 text-emerald-400" />
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#84a09b]">Agent</span>
+                    <div className="ml-auto flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAssistantProvider("xai");
+                          setAssistantModel(settings?.xaiModel ?? "grok-code-fast-1");
+                        }}
+                        className={clsx(
+                          "rounded-lg border px-2 py-1 text-[9px] font-semibold transition",
+                          assistantProvider === "xai"
+                            ? "border-sky-300/30 bg-sky-300/15 text-sky-200"
+                            : "border-white/6 text-stone-500 hover:text-stone-300",
+                        )}
+                      >
+                        xAI
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAssistantProvider("ollama");
+                          const ollamaDefault = settings?.ollamaModel;
+                          setAssistantModel(
+                            ollamaDefault && models.ollama.some((m) => m.modelId === ollamaDefault)
+                              ? ollamaDefault
+                              : models.ollama[0]?.modelId ?? "qwen3.5:2b",
+                          );
+                        }}
+                        className={clsx(
+                          "rounded-lg border px-2 py-1 text-[9px] font-semibold transition",
+                          assistantProvider === "ollama"
+                            ? "border-orange-300/30 bg-orange-300/15 text-orange-200"
+                            : "border-white/6 text-stone-500 hover:text-stone-300",
+                        )}
+                      >
+                        Ollama
+                      </button>
                     </div>
-                    <div className="rounded-2xl border border-white/8 bg-white/5 p-2 text-stone-100">
-                      <Bot className="h-4 w-4" />
-                    </div>
-                  </div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAssistantProvider("xai");
-                        setAssistantModel(settings?.xaiModel ?? "grok-code-fast-1");
-                      }}
-                      className={clsx(
-                        "rounded-xl border px-2 py-1.5 text-[10px] font-semibold transition",
-                        assistantProvider === "xai"
-                          ? "border-sky-300/30 bg-sky-300/15 text-sky-100"
-                          : "border-white/8 bg-black/35 text-stone-400 hover:bg-white/10 hover:text-stone-200",
-                      )}
-                    >
-                      xAI
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAssistantProvider("ollama");
-                        setAssistantModel(models.ollama[0]?.modelId ?? "qwen3.5:2b");
-                      }}
-                      className={clsx(
-                        "rounded-xl border px-2 py-1.5 text-[10px] font-semibold transition",
-                        assistantProvider === "ollama"
-                          ? "border-orange-300/30 bg-orange-300/15 text-orange-100"
-                          : "border-white/8 bg-black/35 text-stone-400 hover:bg-white/10 hover:text-stone-200",
-                      )}
-                    >
-                      Ollama
-                    </button>
                   </div>
                   <select
                     value={assistantModel}
                     onChange={(event) => setAssistantModel(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none focus:border-emerald-300/35"
+                    className="mt-2 w-full rounded-lg border border-white/6 bg-black/30 px-2 py-1.5 font-['IBM_Plex_Mono'] text-[9px] text-stone-200 outline-none focus:border-emerald-300/35"
                   >
                     {assistantProvider === "ollama" ? (
                       models.ollama.length ? (
@@ -4301,63 +4657,156 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                           <option key={m.modelId} value={m.modelId}>{m.label}</option>
                         ))
                       ) : (
-                        <option value="">No Ollama models installed</option>
+                        <option value="">No Ollama models</option>
                       )
                     ) : (
                       CHAT_MODELS.map((modelId) => (
-                        <option key={modelId} value={modelId}>
-                          {modelId}
-                        </option>
+                        <option key={modelId} value={modelId}>{modelId}</option>
                       ))
                     )}
                   </select>
                 </div>
+
+                {/* Messages area */}
                 <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
                   {assistantMessages.length ? (
                     assistantMessages.map((message) => (
                       <article
                         key={message.id}
                         className={clsx(
-                          "rounded-[18px] border px-3 py-2.5",
+                          "rounded-2xl border",
                           message.role === "assistant"
-                            ? "border-white/8 bg-white/[0.03] text-stone-100"
-                            : "border-emerald-300/16 bg-emerald-300/8 text-emerald-50",
+                            ? "border-white/6 bg-white/[0.02]"
+                            : "border-emerald-300/12 bg-emerald-300/5",
                         )}
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-[9px] uppercase tracking-[0.2em] text-stone-400">
-                            {message.role === "assistant" ? assistantModel : "You"}
+                        <div className="flex items-center justify-between gap-2 px-3 pt-2">
+                          <p className={clsx("text-[9px] font-semibold uppercase tracking-[0.15em]", message.role === "assistant" ? "text-stone-500" : "text-emerald-400/70")}>
+                            {message.role === "assistant" ? "Agent" : "You"}
                           </p>
-                          <p className="text-[9px] text-stone-500">{message.status === "streaming" ? "Generating…" : message.status}</p>
+                          {message.status === "streaming" ? (
+                            <span className="flex items-center gap-1 text-[9px] text-emerald-400/60">
+                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                              Generating
+                            </span>
+                          ) : null}
                         </div>
-                        <p className="mt-2 whitespace-pre-wrap text-[11px] leading-5">{message.content || (message.status === "streaming" ? <TypingIndicator /> : "…")}</p>
-                        {message.role === "assistant" && message.content ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPreviewMode("code");
-                              setFileContent(extractAssistantCode(message.content));
-                            }}
-                            className="mt-3 inline-flex items-center gap-1 rounded-lg border border-amber-300/18 bg-amber-300/10 px-2 py-1 text-[10px] text-amber-50 transition hover:bg-amber-300/16"
-                          >
-                            <Code2 className="h-3 w-3" />
-                            Replace Open File
-                          </button>
-                        ) : null}
+                        <div className="px-3 pb-2.5 pt-1.5">
+                          {message.content ? (
+                            <div className="ide-assistant-md text-[11px] leading-5 text-stone-200">
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                  code({ className, children, ...props }) {
+                                    const match = /language-(\w+)/.exec(className ?? "");
+                                    const codeString = String(children).replace(/\n$/, "");
+                                    const isBash = match?.[1] === "bash" || match?.[1] === "sh" || match?.[1] === "shell";
+                                    const isBlock = codeString.includes("\n") || match;
+                                    if (!isBlock) {
+                                      return <code className="rounded bg-white/8 px-1 py-0.5 text-[10px] text-emerald-200" {...props}>{children}</code>;
+                                    }
+                                    let highlighted: string;
+                                    try {
+                                      highlighted = match?.[1] && hljs.getLanguage(match[1])
+                                        ? hljs.highlight(codeString, { language: match[1] }).value
+                                        : hljs.highlightAuto(codeString).value;
+                                    } catch {
+                                      highlighted = codeString.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                                    }
+                                    return (
+                                      <div className="my-2 overflow-hidden rounded-xl border border-white/6 bg-[#060708]">
+                                        <div className="flex items-center justify-between gap-2 border-b border-white/6 px-3 py-1.5">
+                                          <span className="text-[9px] text-stone-500">{match?.[1] ?? "code"}</span>
+                                          <div className="flex items-center gap-1">
+                                            <button
+                                              type="button"
+                                              onClick={() => void navigator.clipboard.writeText(codeString)}
+                                              className="rounded px-1.5 py-0.5 text-[9px] text-stone-500 transition hover:bg-white/8 hover:text-stone-300"
+                                            >
+                                              Copy
+                                            </button>
+                                            {isBash ? (
+                                              <button
+                                                type="button"
+                                                onClick={() => void handleRunInTerminal(codeString)}
+                                                className="rounded bg-amber-300/10 px-1.5 py-0.5 text-[9px] text-amber-200 transition hover:bg-amber-300/20"
+                                              >
+                                                Run
+                                              </button>
+                                            ) : (
+                                              <>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleApplyCode(codeString)}
+                                                  className="rounded bg-emerald-300/10 px-1.5 py-0.5 text-[9px] text-emerald-200 transition hover:bg-emerald-300/20"
+                                                >
+                                                  Apply
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => void handleCreateFileFromAssistant(codeString)}
+                                                  className="rounded bg-sky-300/10 px-1.5 py-0.5 text-[9px] text-sky-200 transition hover:bg-sky-300/20"
+                                                >
+                                                  New File
+                                                </button>
+                                              </>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <pre className="overflow-x-auto px-3 py-2.5 text-[10px] leading-[18px]">
+                                          <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+                                        </pre>
+                                      </div>
+                                    );
+                                  },
+                                  p({ children }) {
+                                    return <p className="my-1.5">{children}</p>;
+                                  },
+                                  ul({ children }) {
+                                    return <ul className="my-1.5 list-disc pl-4 space-y-0.5">{children}</ul>;
+                                  },
+                                  ol({ children }) {
+                                    return <ol className="my-1.5 list-decimal pl-4 space-y-0.5">{children}</ol>;
+                                  },
+                                  h1({ children }) { return <h1 className="mt-3 mb-1 text-[13px] font-bold text-stone-100">{children}</h1>; },
+                                  h2({ children }) { return <h2 className="mt-3 mb-1 text-[12px] font-bold text-stone-100">{children}</h2>; },
+                                  h3({ children }) { return <h3 className="mt-2 mb-1 text-[11px] font-semibold text-stone-200">{children}</h3>; },
+                                  strong({ children }) { return <strong className="font-semibold text-stone-100">{children}</strong>; },
+                                }}
+                              />
+                            </div>
+                          ) : message.status === "streaming" ? (
+                            <TypingIndicator />
+                          ) : (
+                            <p className="text-[11px] text-stone-500">…</p>
+                          )}
+                        </div>
                       </article>
                     ))
                   ) : (
-                    <EmptyPanel
-                      eyebrow="Assistant"
-                      title="No IDE prompts yet."
-                      body="Select a file and ask to explain, refactor, or rewrite it."
-                    />
+                    <div className="flex flex-col items-center gap-3 py-12 text-center">
+                      <div className="rounded-2xl border border-white/6 bg-white/[0.03] p-3">
+                        <Bot className="h-6 w-6 text-emerald-400/50" />
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-medium text-stone-300">Agentic Copilot</p>
+                        <p className="mt-1 text-[10px] leading-5 text-stone-600">
+                          Ask to explain, refactor, write tests, or rewrite code. Code blocks have Apply, Run, and New File actions.
+                        </p>
+                      </div>
+                    </div>
                   )}
                 </div>
-                <div className="border-t border-white/6 px-3 py-3">
-                  <p className="mb-2 text-[10px] text-stone-500">
-                    {activeItem ? `Context file: ${leafName(activeItem.path)}` : "Open a file to provide context."}
-                  </p>
+
+                {/* Composer */}
+                <div className="border-t border-white/6 px-3 py-2.5">
+                  {activeItem ? (
+                    <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-white/[0.03] px-2 py-1">
+                      <Code2 className="h-3 w-3 text-stone-500" />
+                      <span className="truncate text-[9px] text-stone-500">{leafName(activeItem.path)}</span>
+                      <span className="ml-auto text-[9px] text-stone-600">{activeItem.languageHint ?? "text"}</span>
+                    </div>
+                  ) : null}
                   <textarea
                     value={assistantComposer}
                     onChange={(event) => setAssistantComposer(event.target.value)}
@@ -4367,32 +4816,100 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                         void sendAssistantMessage();
                       }
                     }}
-                    placeholder="Ask to change the current file…"
-                    className="min-h-24 w-full resize-none rounded-[18px] border border-white/8 bg-black/30 px-3 py-3 text-[11px] leading-5 text-stone-100 outline-none placeholder:text-stone-600 focus:border-emerald-300/35"
+                    placeholder={activeItem ? "Refactor this, add types, explain…" : "Ask anything…"}
+                    className="min-h-20 w-full resize-none rounded-xl border border-white/6 bg-black/30 px-3 py-2.5 text-[11px] leading-5 text-stone-100 outline-none placeholder:text-stone-600 focus:border-emerald-300/30"
                   />
-                  <button
-                    type="button"
-                    onClick={() => void sendAssistantMessage()}
-                    disabled={!assistantComposer.trim() || assistantSending}
-                    className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-xl border border-emerald-300/20 bg-emerald-300/12 px-3 py-2 text-[10px] text-emerald-50 transition hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/5 disabled:text-stone-500"
-                  >
-                    <Send className="h-3 w-3" />
-                    {assistantSending ? "Sending…" : "Send"}
-                  </button>
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void sendAssistantMessage()}
+                      disabled={!assistantComposer.trim() || assistantSending}
+                      className="inline-flex flex-1 items-center justify-center gap-1 rounded-xl border border-emerald-300/20 bg-emerald-300/12 px-3 py-2 text-[10px] text-emerald-50 transition hover:bg-emerald-300/20 disabled:cursor-not-allowed disabled:border-white/6 disabled:bg-white/[0.03] disabled:text-stone-600"
+                    >
+                      <Send className="h-3 w-3" />
+                      {assistantSending ? "Generating…" : "Send"}
+                    </button>
+                    {assistantMessages.length ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAssistantMessages([]);
+                          setAssistantConversationId(undefined);
+                        }}
+                        title="Clear conversation"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/6 text-stone-500 transition hover:bg-white/[0.05] hover:text-stone-300"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               </>
             )}
           </aside>
+      </div>
+      {/* Quick Open modal (Cmd+P) */}
+      {quickOpenVisible ? (
+        <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh]" onClick={() => setQuickOpenVisible(false)}>
+          <div
+            className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0c0d0f] shadow-[0_24px_80px_rgba(0,0,0,0.6)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 border-b border-white/6 px-4 py-3">
+              <Files className="h-4 w-4 text-stone-400" />
+              <input
+                autoFocus
+                value={quickOpenQuery}
+                onChange={(e) => { setQuickOpenQuery(e.target.value); setQuickOpenIndex(0); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") { setQuickOpenVisible(false); return; }
+                  if (e.key === "ArrowDown") { e.preventDefault(); setQuickOpenIndex((i) => Math.min(i + 1, quickOpenResults.length - 1)); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); setQuickOpenIndex((i) => Math.max(i - 1, 0)); return; }
+                  if (e.key === "Enter" && quickOpenResults[quickOpenIndex]) {
+                    e.preventDefault();
+                    handleSelectFile(quickOpenResults[quickOpenIndex].path);
+                    setQuickOpenVisible(false);
+                  }
+                }}
+                placeholder="Search files by name…"
+                className="min-w-0 flex-1 bg-transparent font-['IBM_Plex_Mono'] text-[12px] text-stone-100 outline-none placeholder:text-stone-600"
+              />
+              <kbd className="rounded border border-white/8 bg-white/[0.04] px-1.5 py-0.5 text-[9px] text-stone-500">ESC</kbd>
+            </div>
+            <div className="max-h-[320px] overflow-y-auto py-1">
+              {quickOpenResults.length ? (
+                quickOpenResults.map((item, i) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => { handleSelectFile(item.path); setQuickOpenVisible(false); }}
+                    className={clsx(
+                      "flex w-full items-center gap-2 px-4 py-2 text-left transition",
+                      i === quickOpenIndex
+                        ? "bg-emerald-300/10 text-stone-100"
+                        : "text-stone-400 hover:bg-white/[0.04]",
+                    )}
+                  >
+                    <Code2 className="h-3.5 w-3.5 shrink-0 text-stone-500" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[11px] font-medium">{leafName(item.path)}</p>
+                      <p className="truncate text-[9px] text-stone-600">
+                        {relativeWorkspacePath(item.path, activeWorkspace?.roots ?? [])}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded bg-white/[0.04] px-1.5 py-0.5 text-[9px] text-stone-600">
+                      {item.languageHint ?? "text"}
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <p className="px-4 py-6 text-center text-[11px] text-stone-600">No matching files</p>
+              )}
+            </div>
+          </div>
         </div>
-      ) : (
-        <div className="px-3 py-3">
-          <EmptyPanel
-            eyebrow="IDE"
-            title="No workspace selected."
-            body="Attach a workspace from the right sidebar first, then this page will open its indexed files as an in-app IDE."
-          />
-        </div>
-      )}
+      ) : null}
+
       {contextMenu ? (
         <div
           className="fixed z-50 w-44 rounded-[18px] border border-white/8 bg-[#0b0c0d] p-1.5 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
@@ -4469,6 +4986,304 @@ function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   );
 }
 
+function MusicSidebar() {
+  const musicCategories = useAppStore((s) => s.musicCategories);
+  const musicTracks = useAppStore((s) => s.musicTracks);
+  const activeMusicCategory = useAppStore((s) => s.activeMusicCategory);
+  const setActiveMusicCategory = useAppStore((s) => s.setActiveMusicCategory);
+  const refreshMusicCategories = useAppStore((s) => s.refreshMusicCategories);
+  const createMusicCategory = useAppStore((s) => s.createMusicCategory);
+  const deleteMusicCategory = useAppStore((s) => s.deleteMusicCategory);
+  const importMusicFiles = useAppStore((s) => s.importMusicFiles);
+  const refreshMusicLibrary = useAppStore((s) => s.refreshMusicLibrary);
+
+  const [newPlaylistName, setNewPlaylistName] = useState("");
+  const [showNewPlaylist, setShowNewPlaylist] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  // Load categories on mount
+  useEffect(() => {
+    void refreshMusicCategories();
+  }, []);
+
+  const handleCreatePlaylist = async () => {
+    const name = newPlaylistName.trim();
+    if (!name) return;
+    try {
+      await createMusicCategory(name);
+      setNewPlaylistName("");
+      setShowNewPlaylist(false);
+    } catch (err) {
+      console.error("Failed to create playlist:", err);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    const audioExts = new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac", "opus", "wma"]);
+    const audioPaths = files
+      .filter((f) => {
+        const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
+        return audioExts.has(ext);
+      })
+      .map((f) => (f as unknown as { path?: string }).path)
+      .filter((p): p is string => !!p);
+
+    if (audioPaths.length) {
+      try {
+        const count = await importMusicFiles(audioPaths, activeMusicCategory);
+        if (count > 0) void refreshMusicLibrary();
+      } catch (err) {
+        console.error("Import failed:", err);
+      }
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+  };
+
+  const handleImportClick = async () => {
+    try {
+      const selection = await openDialog({
+        multiple: true,
+        filters: [{ name: "Audio", extensions: ["mp3", "wav", "ogg", "flac", "m4a", "aac", "opus", "wma"] }],
+      });
+      if (!selection) return;
+      const paths = Array.isArray(selection) ? selection : [selection];
+      const validPaths = paths.filter((p): p is string => typeof p === "string");
+      if (validPaths.length) {
+        const count = await importMusicFiles(validPaths, activeMusicCategory);
+        if (count > 0) void refreshMusicLibrary();
+      }
+    } catch (err) {
+      console.error("Import dialog failed:", err);
+    }
+  };
+
+  const handleAddFolder = async () => {
+    try {
+      const selection = await openDialog({ directory: true, multiple: false });
+      if (typeof selection === "string") {
+        // Use the folder name as category name, import all audio files from it
+        const folderName = selection.split("/").pop() ?? selection.split("\\").pop() ?? "Imported";
+        // Create category first
+        try { await createMusicCategory(folderName); } catch { /* may already exist */ }
+        // Walk the folder and import files
+        // We tell the backend to import from this source folder into the target category
+        await importMusicFiles([selection], folderName);
+      }
+    } catch (err) {
+      console.error("Add folder failed:", err);
+    }
+  };
+
+  // Count tracks with no category (root level)
+  const rootTrackCount = musicTracks.filter((t) => !t.category).length;
+
+  return (
+    <aside
+      className="flex min-h-0 flex-col bg-[linear-gradient(180deg,rgba(10,11,13,0.98),rgba(7,8,10,0.95))]"
+      onDrop={(e) => void handleDrop(e)}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+    >
+      {/* Header */}
+      <div className="border-b border-white/6 px-3 py-3">
+        <p className="text-[10px] uppercase tracking-[0.35em] text-[#84a09b]">Music Library</p>
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleImportClick()}
+            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-emerald-300/18 bg-emerald-300/10 px-3 py-2 text-[10px] text-emerald-50 transition hover:bg-emerald-300/16"
+          >
+            <Plus className="h-3 w-3" />
+            Import Files
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleAddFolder()}
+            className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-200 transition hover:bg-white/10"
+          >
+            <FolderPlus className="h-3 w-3" />
+            Add Folder
+          </button>
+        </div>
+      </div>
+
+      {/* Library / categories list */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* All Tracks */}
+        <button
+          type="button"
+          onClick={() => setActiveMusicCategory(undefined)}
+          className={clsx(
+            "flex w-full items-center gap-3 px-4 py-2.5 text-left transition",
+            !activeMusicCategory
+              ? "bg-emerald-300/[0.08] border-r-2 border-emerald-400"
+              : "hover:bg-white/[0.03]",
+          )}
+        >
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-gradient-to-br from-emerald-500/15 to-sky-500/10">
+            <Music className="h-3.5 w-3.5 text-emerald-300" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className={clsx("text-[11px] font-semibold", !activeMusicCategory ? "text-emerald-200" : "text-stone-200")}>
+              All Tracks
+            </p>
+            <p className="text-[9px] text-stone-500">{musicTracks.length} track{musicTracks.length !== 1 ? "s" : ""}</p>
+          </div>
+        </button>
+
+        {/* Uncategorized (root files) */}
+        {rootTrackCount > 0 && rootTrackCount < musicTracks.length ? (
+          <button
+            type="button"
+            onClick={() => setActiveMusicCategory("__uncategorized__")}
+            className={clsx(
+              "flex w-full items-center gap-3 px-4 py-2.5 text-left transition",
+              activeMusicCategory === "__uncategorized__"
+                ? "bg-emerald-300/[0.08] border-r-2 border-emerald-400"
+                : "hover:bg-white/[0.03]",
+            )}
+          >
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03]">
+              <ListMusic className="h-3.5 w-3.5 text-stone-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className={clsx("text-[11px] font-medium", activeMusicCategory === "__uncategorized__" ? "text-emerald-200" : "text-stone-300")}>
+                Uncategorized
+              </p>
+              <p className="text-[9px] text-stone-500">{rootTrackCount} track{rootTrackCount !== 1 ? "s" : ""}</p>
+            </div>
+          </button>
+        ) : null}
+
+        {/* Divider + Categories heading */}
+        {musicCategories.length > 0 || showNewPlaylist ? (
+          <div className="flex items-center justify-between border-t border-white/6 px-4 py-2">
+            <span className="text-[9px] uppercase tracking-[0.3em] text-stone-500">Playlists & Folders</span>
+            <button
+              type="button"
+              onClick={() => setShowNewPlaylist(true)}
+              className="rounded p-0.5 text-stone-400 transition hover:bg-white/8 hover:text-stone-200"
+              title="New Playlist"
+            >
+              <Plus className="h-3 w-3" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between border-t border-white/6 px-4 py-2">
+            <span className="text-[9px] uppercase tracking-[0.3em] text-stone-500">Playlists & Folders</span>
+            <button
+              type="button"
+              onClick={() => setShowNewPlaylist(true)}
+              className="rounded p-0.5 text-stone-400 transition hover:bg-white/8 hover:text-stone-200"
+              title="New Playlist"
+            >
+              <Plus className="h-3 w-3" />
+            </button>
+          </div>
+        )}
+
+        {/* New playlist input */}
+        {showNewPlaylist ? (
+          <div className="flex items-center gap-2 px-4 py-2">
+            <input
+              autoFocus
+              value={newPlaylistName}
+              onChange={(e) => setNewPlaylistName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleCreatePlaylist();
+                if (e.key === "Escape") { setShowNewPlaylist(false); setNewPlaylistName(""); }
+              }}
+              placeholder="Playlist name..."
+              className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-[11px] text-stone-100 outline-none placeholder:text-stone-600 focus:border-emerald-300/30"
+            />
+            <button
+              type="button"
+              onClick={() => void handleCreatePlaylist()}
+              disabled={!newPlaylistName.trim()}
+              className="rounded-lg border border-emerald-300/20 bg-emerald-300/10 px-2 py-1.5 text-[10px] text-emerald-50 transition hover:bg-emerald-300/16 disabled:opacity-40"
+            >
+              Create
+            </button>
+          </div>
+        ) : null}
+
+        {/* Category list */}
+        {musicCategories.map((cat) => (
+          <div key={cat.path} className="group relative">
+            <button
+              type="button"
+              onClick={() => setActiveMusicCategory(cat.name)}
+              className={clsx(
+                "flex w-full items-center gap-3 px-4 py-2 text-left transition",
+                activeMusicCategory === cat.name
+                  ? "bg-emerald-300/[0.08] border-r-2 border-emerald-400"
+                  : "hover:bg-white/[0.03]",
+              )}
+            >
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-gradient-to-br from-purple-500/12 to-pink-500/10">
+                <Hash className="h-3.5 w-3.5 text-purple-300" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className={clsx("truncate text-[11px] font-medium", activeMusicCategory === cat.name ? "text-emerald-200" : "text-stone-200")}>
+                  {cat.name}
+                </p>
+                <p className="text-[9px] text-stone-500">{cat.trackCount} track{cat.trackCount !== 1 ? "s" : ""}</p>
+              </div>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void deleteMusicCategory(cat.path);
+                  if (activeMusicCategory === cat.name) setActiveMusicCategory(undefined);
+                }}
+                className="rounded p-1 text-stone-600 opacity-0 transition hover:bg-red-500/15 hover:text-red-300 group-hover:opacity-100"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </button>
+          </div>
+        ))}
+
+        {/* Empty state for categories */}
+        {musicCategories.length === 0 && !showNewPlaylist ? (
+          <div className="px-4 py-4 text-center">
+            <p className="text-[10px] text-stone-500 leading-4">
+              Add folders of music or create playlists to organize your library.
+            </p>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Drop zone overlay */}
+      {dragOver ? (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-emerald-400/50 bg-emerald-400/[0.06] backdrop-blur-sm">
+          <Music className="h-8 w-8 text-emerald-300 mb-2" />
+          <p className="text-[12px] font-semibold text-emerald-200">Drop audio files here</p>
+          <p className="text-[10px] text-emerald-300/60 mt-1">
+            {activeMusicCategory ? `Adding to "${activeMusicCategory}"` : "Adding to library"}
+          </p>
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
 function RightSidebar({
   page,
   mode,
@@ -4478,6 +5293,8 @@ function RightSidebar({
   mode: RightPanelMode;
   onSelectMode: (mode: RightPanelMode) => void;
 }) {
+  if (page === "music") return <MusicSidebar />;
+
   return (
     <aside className="flex min-h-0 flex-col bg-[linear-gradient(180deg,rgba(10,11,13,0.98),rgba(7,8,10,0.95))]">
       <div className="border-b border-white/6 px-3 py-3">
@@ -5482,16 +6299,40 @@ function EditorPage({
   onSelectClip,
   onUpdateClip,
   onRemoveClip,
-  onMoveClip,
+  onAddClip,
+  onReorderClips,
   onClear,
+  subtitleClips,
+  onAddSubtitle,
+  onUpdateSubtitle,
+  onRemoveSubtitle,
+  overlayClips,
+  onAddOverlay,
+  onUpdateOverlay,
+  onRemoveOverlay,
+  editorAspect,
+  onSetEditorAspect,
+  clipboardRef,
 }: {
   clips: EditorClip[];
   activeClipId?: string;
   onSelectClip: (clipId?: string) => void;
   onUpdateClip: (clipId: string, patch: Partial<EditorClip>) => void;
   onRemoveClip: (clipId: string) => void;
-  onMoveClip: (clipId: string, direction: "up" | "down") => void;
+  onAddClip: (clip: EditorClip) => void;
+  onReorderClips: (clips: EditorClip[]) => void;
   onClear: () => void;
+  subtitleClips: SubtitleClip[];
+  onAddSubtitle: (sub: SubtitleClip) => void;
+  onUpdateSubtitle: (id: string, patch: Partial<SubtitleClip>) => void;
+  onRemoveSubtitle: (id: string) => void;
+  overlayClips: OverlayClip[];
+  onAddOverlay: (ov: OverlayClip) => void;
+  onUpdateOverlay: (id: string, patch: Partial<OverlayClip>) => void;
+  onRemoveOverlay: (id: string) => void;
+  editorAspect: "landscape" | "vertical";
+  onSetEditorAspect: (aspect: "landscape" | "vertical") => void;
+  clipboardRef: React.MutableRefObject<EditorClip | null>;
 }) {
   const chrome = useContext(ShellChromeContext);
   const mediaCategories = useAppStore((state) => state.mediaCategories);
@@ -5504,6 +6345,61 @@ function EditorPage({
   const [exportCategoryId, setExportCategoryId] = useState<string>(selectedMediaCategoryId ?? "");
   const [importing, setImporting] = useState(false);
   const [previewSources, setPreviewSources] = useState<Record<string, string>>({});
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportToast, setExportToast] = useState<string>();
+  const exportDropRef = useRef<HTMLDivElement>(null);
+
+  // Playback state
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const rafRef = useRef<number | undefined>(undefined);
+  const lastFrameRef = useRef<number | undefined>(undefined);
+  const videoPreviewRef = useRef<HTMLVideoElement>(null);
+  const audioPreviewRef = useRef<HTMLAudioElement>(null);
+
+  // Timeline zoom
+  const [timelineZoom, setTimelineZoom] = useState(100);
+
+  // Context menu
+  const [ctxMenu, setCtxMenu] = useState<EditorContextMenu>();
+
+  // Subtitle editing
+  const [editingSubId, setEditingSubId] = useState<string>();
+  const [editingSubText, setEditingSubText] = useState("");
+
+  // Overlay state
+  const [activeOverlayId, setActiveOverlayId] = useState<string>();
+  const overlayClipboardRef = useRef<OverlayClip | null>(null);
+
+  // Preview drag state for subtitles and overlays
+  const [previewDrag, setPreviewDrag] = useState<{ type: "subtitle" | "overlay"; id: string; startX: number; startY: number; origX: number; origY: number }>();
+  const [resizeDrag, setResizeDrag] = useState<{ id: string; startX: number; startY: number; origW: number; origH: number }>();
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+
+  // Drag-to-reorder
+  const [clipDrag, setClipDrag] = useState<{ clipId: string; startX: number; currentX: number; track: "visual" | "audio" }>();
+
+  // Subtitle timeline drag
+  const [subDrag, setSubDrag] = useState<{ id: string; startX: number; origStart: number; origEnd: number }>();
+
+  // Overlay timeline trim drag
+  const [ovTrimDrag, setOvTrimDrag] = useState<{ id: string; side: "start" | "end"; startX: number; origStart: number; origEnd: number }>();
+
+  // Trim drag
+  const [trimDrag, setTrimDrag] = useState<{ clip: EditorClip; side: "start" | "end"; startX: number; frozenDuration: number }>();
+  const tracksLaneRef = useRef<HTMLDivElement>(null);
+
+  const visualTrack = useMemo(() => buildTimelineTrack(clips, "visual"), [clips]);
+  const audioTrack = useMemo(() => buildTimelineTrack(clips, "audio"), [clips]);
+  const timelineDuration = Math.max(visualTrack.duration, audioTrack.duration,
+    subtitleClips.length ? Math.max(...subtitleClips.map((s) => s.end)) : 0,
+    overlayClips.length ? Math.max(...overlayClips.map((o) => o.end)) : 0, 1);
+
+  // Determine which clip is at playhead for preview
+  const playheadVisualItem = useMemo(() => findClipAtTime(visualTrack.items, currentTime), [visualTrack.items, currentTime]);
+  const playheadAudioItem = useMemo(() => findClipAtTime(audioTrack.items, currentTime), [audioTrack.items, currentTime]);
+  const previewClip = playheadVisualItem?.clip ?? playheadAudioItem?.clip ?? clips[clips.length - 1];
+  const previewSrc = previewClip ? previewSources[previewClip.asset.id] : undefined;
 
   useEffect(() => { void ensureMediaLoaded(); }, [ensureMediaLoaded]);
 
@@ -5513,534 +6409,1015 @@ function EditorPage({
     }
   }, [exportCategoryId, selectedMediaCategoryId]);
 
+  // Preview source loading (clips + overlays)
   useEffect(() => {
     let cancelled = false;
-    const missing = clips.filter((clip) => !previewSources[clip.asset.id]);
-    if (!missing.length) {
-      return undefined;
-    }
-
+    const missingClips = clips.filter((clip) => !previewSources[clip.asset.id]).map((c) => ({ id: c.asset.id, path: c.asset.filePath }));
+    const missingOverlays = overlayClips.filter((ov) => !previewSources[ov.assetId]).map((o) => ({ id: o.assetId, path: o.filePath }));
+    const allMissing = [...missingClips, ...missingOverlays];
+    if (!allMissing.length) return undefined;
     void Promise.all(
-      missing.map(async (clip) => ({
-        assetId: clip.asset.id,
-        src: await api.readMediaDataUrl(clip.asset.filePath),
-      })),
+      allMissing.map(async (m) => ({ assetId: m.id, src: await api.readMediaDataUrl(m.path) })),
     )
       .then((entries) => {
-        if (cancelled) {
-          return;
-        }
-        setPreviewSources((current) => ({
-          ...current,
-          ...Object.fromEntries(entries.map((entry) => [entry.assetId, entry.src])),
-        }));
+        if (cancelled) return;
+        setPreviewSources((current) => ({ ...current, ...Object.fromEntries(entries.map((e) => [e.assetId, e.src])) }));
       })
       .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [clips, overlayClips, previewSources]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [clips, previewSources]);
-
+  // Probe actual media duration for clips that don't have one yet
   useEffect(() => {
-    if (!clips.length) {
-      if (activeClipId) {
-        onSelectClip(undefined);
-      }
-      return;
-    }
-    if (!activeClipId || !clips.some((clip) => clip.id === activeClipId)) {
-      onSelectClip(clips[clips.length - 1]?.id);
-    }
+    const needDuration = clips.filter((c) => c.mediaDuration === undefined && c.asset.kind !== "image" && previewSources[c.asset.id]);
+    if (!needDuration.length) return;
+    needDuration.forEach((clip) => {
+      const src = previewSources[clip.asset.id];
+      const el = clip.asset.kind === "video" ? document.createElement("video") : document.createElement("audio");
+      el.preload = "metadata";
+      el.onloadedmetadata = () => {
+        if (Number.isFinite(el.duration) && el.duration > 0) {
+          onUpdateClip(clip.id, { mediaDuration: el.duration } as Partial<EditorClip>);
+        }
+        el.src = "";
+      };
+      el.src = src;
+    });
+  }, [clips, previewSources, onUpdateClip]);
+
+  // Auto-select latest clip
+  useEffect(() => {
+    if (!clips.length) { if (activeClipId) onSelectClip(undefined); return; }
+    if (!activeClipId || !clips.some((c) => c.id === activeClipId)) onSelectClip(clips[clips.length - 1]?.id);
   }, [activeClipId, clips, onSelectClip]);
 
-  const activeClip = clips.find((clip) => clip.id === activeClipId) ?? clips[clips.length - 1];
-  const activeSrc = activeClip ? previewSources[activeClip.asset.id] : undefined;
-  const visualTrack = useMemo(() => buildTimelineTrack(clips, "visual"), [clips]);
-  const audioTrack = useMemo(() => buildTimelineTrack(clips, "audio"), [clips]);
-  const timelineDuration = Math.max(visualTrack.duration, audioTrack.duration, 1);
-
-  return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="border-b border-white/6 px-3 py-3">
-        <p className="text-[10px] uppercase tracking-[0.35em] text-[#84a09b]">Editor</p>
-        <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-[18px] font-semibold text-stone-100">Media Editor</h2>
-            <p className="mt-1 text-[11px] text-stone-400">
-              Queue gallery assets here, shape the visual and audio timelines, then export a final `.mp4`.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-1.5 text-[10px] text-stone-400">
-            <span className="rounded-full border border-white/7 bg-white/[0.03] px-2.5 py-1">
-              {visualTrack.items.length} visual
-            </span>
-            <span className="rounded-full border border-white/7 bg-white/[0.03] px-2.5 py-1">
-              {audioTrack.items.length} audio
-            </span>
-            <span className="rounded-full border border-white/7 bg-white/[0.03] px-2.5 py-1 font-['IBM_Plex_Mono']">
-              {formatTimelineSeconds(timelineDuration)} total
-            </span>
-            <button
-              type="button"
-              disabled={importing}
-              onClick={async () => {
-                try {
-                  const selection = await openDialog({
-                    multiple: false,
-                    filters: [
-                      { name: "Media", extensions: ["mp4", "mov", "mp3", "wav", "png", "jpg", "jpeg", "gif", "webp"] },
-                    ],
-                  });
-                  if (typeof selection === "string") {
-                    setImporting(true);
-                    try {
-                      const asset = await importLocalMediaAsset(selection);
-                      if (asset) {
-                        chrome?.openEditorAsset(asset);
-                      }
-                    } finally {
-                      setImporting(false);
-                    }
-                  }
-                } catch (err) {
-                  console.error("Failed to import media:", err);
-                }
-              }}
-              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/18 bg-emerald-300/10 px-2.5 py-1 text-[10px] text-emerald-50 transition hover:bg-emerald-300/16 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <FolderPlus className="h-3 w-3" />
-              {importing ? "Importing…" : "Import Media"}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {clips.length ? (
-        <div className="grid min-h-0 flex-1 gap-2.5 overflow-y-auto px-3 py-3 xl:grid-cols-[minmax(0,1.58fr)_320px] xl:grid-rows-[minmax(340px,1fr)_minmax(260px,0.82fr)]">
-          <section className="flex min-h-[320px] min-w-0 flex-col overflow-hidden rounded-[24px] border border-white/8 bg-[linear-gradient(180deg,rgba(12,13,15,0.98),rgba(7,8,10,0.97))]">
-            <div className="flex items-start justify-between gap-3 border-b border-white/6 px-3 py-3">
-              <div>
-                <p className="font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.18em] text-stone-400">
-                  {activeClip ? `${activeClip.asset.kind} clip` : "Queue"}
-                </p>
-                <p className="mt-1 text-[13px] font-semibold text-stone-100">
-                  {activeClip?.asset.prompt ?? "Select a clip"}
-                </p>
-              </div>
-              {activeClip ? (
-                <div className="rounded-full border border-white/8 bg-white/5 px-2.5 py-1 font-['IBM_Plex_Mono'] text-[9px] text-stone-300">
-                  {leafName(activeClip.asset.filePath)}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="flex min-h-0 flex-1 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(38,56,54,0.24),rgba(3,5,7,0.98)_62%)] p-4">
-              <EditorPreview clip={activeClip} src={activeSrc} />
-            </div>
-
-            <div className="border-t border-white/6 px-3 py-2.5">
-              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {clips.map((clip, index) => (
-                  <button
-                    key={clip.id}
-                    type="button"
-                    onClick={() => onSelectClip(clip.id)}
-                    className={clsx(
-                      "rounded-[16px] border px-3 py-2 text-left transition",
-                      clip.id === activeClipId
-                        ? "border-amber-300/20 bg-amber-300/10 text-amber-50"
-                        : "border-white/8 bg-white/[0.03] text-stone-300 hover:bg-white/[0.06]",
-                    )}
-                  >
-                    <p className="font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.18em] text-stone-400">
-                      Clip {index + 1} · {clip.asset.kind}
-                    </p>
-                    <p className="mt-1 line-clamp-2 text-[10px] leading-5">{clip.asset.prompt}</p>
-                    <p className="mt-2 text-[9px] text-stone-500">{formatTimelineSeconds(getEditorClipDuration(clip))}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          <aside className="min-h-[320px] space-y-2.5 overflow-y-auto rounded-[24px] border border-white/8 bg-white/[0.03] p-2.5">
-            <section className="rounded-[20px] border border-white/8 bg-black/20 p-3">
-              <p className="text-[10px] uppercase tracking-[0.3em] text-[#84a09b]">Export</p>
-              <div className="mt-3 grid gap-2">
-                <input
-                  value={exportTitle}
-                  onChange={(event) => setExportTitle(event.target.value)}
-                  placeholder="Export title"
-                  className="w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 text-[11px] text-stone-100 outline-none focus:border-amber-300/35"
-                />
-                <select
-                  value={exportCategoryId}
-                  onChange={(event) => setExportCategoryId(event.target.value)}
-                  className="w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none focus:border-amber-300/35"
-                >
-                  <option value="">Auto-categorize</option>
-                  {mediaCategories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() =>
-                    void exportEditorTimeline({
-                      title: exportTitle.trim() || "Editor Export",
-                      categoryId: exportCategoryId || undefined,
-                      clips: clips.map((clip) => ({
-                        assetId: clip.asset.id,
-                        kind: clip.asset.kind,
-                        filePath: clip.asset.filePath,
-                        trimStart: Number.isFinite(Number(clip.trimStart)) ? Number(clip.trimStart) : 0,
-                        trimEnd:
-                          clip.trimEnd.trim() && Number.isFinite(Number(clip.trimEnd))
-                            ? Number(clip.trimEnd)
-                            : undefined,
-                        stillDuration:
-                          clip.asset.kind === "image" && Number.isFinite(Number(clip.stillDuration))
-                            ? Number(clip.stillDuration)
-                            : 3,
-                      })),
-                    })
-                  }
-                  disabled={!clips.length || exportingEditor}
-                  className="rounded-xl border border-amber-300/20 bg-amber-300/12 px-3 py-2 text-[10px] font-semibold text-amber-50 transition hover:bg-amber-300/18 disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/5 disabled:text-stone-500"
-                >
-                  {exportingEditor ? "Exporting…" : "Export Video"}
-                </button>
-                <button
-                  type="button"
-                  onClick={onClear}
-                  disabled={!clips.length || exportingEditor}
-                  className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:text-stone-500"
-                >
-                  Clear Timeline
-                </button>
-              </div>
-              <p className="mt-3 text-[10px] leading-5 text-stone-500">
-                Export currently builds the visual track and audio track separately, aligns both at `0s`, and finishes on the shorter result.
-              </p>
-            </section>
-
-            {activeClip ? (
-              <section className="rounded-[20px] border border-white/8 bg-black/20 p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.3em] text-[#84a09b]">Inspector</p>
-                    <p className="mt-2 text-[12px] font-semibold text-stone-100">{activeClip.asset.prompt}</p>
-                  </div>
-                  <div className="rounded-full border border-white/8 bg-white/5 px-2 py-1 font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.18em] text-stone-300">
-                    {activeClip.asset.kind}
-                  </div>
-                </div>
-
-                <div className="mt-3 grid gap-2">
-                  <label className="space-y-1 text-[10px] text-stone-400">
-                    <span>Trim start (s)</span>
-                    <input
-                      value={activeClip.trimStart}
-                      onChange={(event) => onUpdateClip(activeClip.id, { trimStart: event.target.value })}
-                      className="w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none focus:border-amber-300/35"
-                    />
-                  </label>
-                  <label className="space-y-1 text-[10px] text-stone-400">
-                    <span>{activeClip.asset.kind === "image" ? "Still duration (s)" : "Trim end (s)"}</span>
-                    <input
-                      value={activeClip.asset.kind === "image" ? activeClip.stillDuration : activeClip.trimEnd}
-                      onChange={(event) =>
-                        activeClip.asset.kind === "image"
-                          ? onUpdateClip(activeClip.id, { stillDuration: event.target.value })
-                          : onUpdateClip(activeClip.id, { trimEnd: event.target.value })
-                      }
-                      className="w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none focus:border-amber-300/35"
-                    />
-                  </label>
-                </div>
-
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onMoveClip(activeClip.id, "up")}
-                    className="inline-flex items-center justify-center gap-1 rounded-xl border border-white/8 bg-white/5 px-2 py-2 text-[10px] text-stone-200 transition hover:bg-white/10"
-                  >
-                    <MoveUp className="h-3 w-3" />
-                    Up
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onMoveClip(activeClip.id, "down")}
-                    className="inline-flex items-center justify-center gap-1 rounded-xl border border-white/8 bg-white/5 px-2 py-2 text-[10px] text-stone-200 transition hover:bg-white/10"
-                  >
-                    <MoveDown className="h-3 w-3" />
-                    Down
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onRemoveClip(activeClip.id)}
-                    className="inline-flex items-center justify-center gap-1 rounded-xl border border-white/8 bg-white/5 px-2 py-2 text-[10px] text-rose-200 transition hover:bg-rose-500/15"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    Remove
-                  </button>
-                </div>
-
-                <div className="mt-3 grid gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (activeSrc) {
-                        chrome?.openBrowserPreview(buildAssetPreviewDocument(activeClip.asset, activeSrc));
-                      }
-                    }}
-                    disabled={!activeSrc}
-                    className="inline-flex items-center justify-center gap-1 rounded-xl border border-sky-300/18 bg-sky-300/10 px-3 py-2 text-[10px] text-sky-100 transition hover:bg-sky-300/16 disabled:cursor-not-allowed disabled:border-white/8 disabled:bg-white/5 disabled:text-stone-500"
-                  >
-                    <Eye className="h-3 w-3" />
-                    Open in Browser
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void navigator.clipboard.writeText(activeClip.asset.filePath)}
-                    className="inline-flex items-center justify-center gap-1 rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-200 transition hover:bg-white/10"
-                  >
-                    <Copy className="h-3 w-3" />
-                    Copy Path
-                  </button>
-                </div>
-              </section>
-            ) : null}
-          </aside>
-
-          <section className="flex min-h-[260px] flex-col overflow-hidden rounded-[24px] border border-white/8 bg-white/[0.03] xl:col-span-2">
-            <div className="flex items-center justify-between gap-3 border-b border-white/6 px-3 py-2.5">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-[#84a09b]">Tracks</p>
-                <h3 className="mt-1 text-[13px] font-semibold text-stone-100">Visual and audio lanes</h3>
-              </div>
-              <p className="max-w-sm text-right text-[10px] leading-5 text-stone-500">
-                Visual clips chain left-to-right on the top lane. Audio clips build their own parallel lane so they overlap the picture from time zero.
-              </p>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-auto px-2.5 py-2.5">
-              <TimelineScale duration={timelineDuration} />
-              <div className="mt-2.5 space-y-2.5">
-                <TimelineTrack
-                  label="Visual"
-                  emptyLabel="Add image or video assets from Image & Video or Voice & Audio."
-                  items={visualTrack.items}
-                  timelineDuration={timelineDuration}
-                  activeClipId={activeClipId}
-                  onSelectClip={onSelectClip}
-                  onUpdateClip={onUpdateClip}
-                />
-                <TimelineTrack
-                  label="Audio"
-                  emptyLabel="Queue speech or audio clips to build the soundtrack."
-                  items={audioTrack.items}
-                  timelineDuration={timelineDuration}
-                  activeClipId={activeClipId}
-                  onSelectClip={onSelectClip}
-                  onUpdateClip={onUpdateClip}
-                />
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : (
-        <div className="px-3 py-3">
-          <EmptyPanel
-            eyebrow="Editor"
-            title="No clips queued yet."
-            body="Use the Editor button on any gallery card to send assets here, then shape the timeline and export the cut."
-          />
-        </div>
-      )}
-    </section>
-  );
-}
-
-function EditorPreview({ clip, src }: { clip?: EditorClip; src?: string }) {
-  if (!clip) {
-    return <div className="text-[11px] text-stone-500">Select a clip to preview it here.</div>;
-  }
-
-  if (!src) {
-    return <div className="text-[11px] text-stone-500">Loading clip preview…</div>;
-  }
-
-  if (clip.asset.kind === "video") {
-    return (
-      <video
-        src={src}
-        controls
-        className="max-h-full max-w-full rounded-[20px] border border-white/8 bg-black object-contain"
-      />
-    );
-  }
-
-  if (clip.asset.kind === "audio") {
-    return (
-      <div className="flex w-full max-w-3xl flex-col items-center justify-center gap-4 rounded-[28px] border border-white/8 bg-black/25 px-6 py-8 text-center">
-        <div className="flex h-16 w-16 items-center justify-center rounded-full border border-emerald-300/20 bg-emerald-300/10 text-emerald-100">
-          <AudioLines className="h-7 w-7" />
-        </div>
-        <div>
-          <p className="text-[10px] uppercase tracking-[0.28em] text-[#84a09b]">Audio clip</p>
-          <p className="mt-2 text-[13px] font-semibold text-stone-100">{clip.asset.prompt}</p>
-        </div>
-        <audio src={src} controls className="w-full" />
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={src}
-      alt={clip.asset.prompt}
-      className="max-h-full max-w-full rounded-[20px] border border-white/8 bg-black object-contain"
-    />
-  );
-}
-
-function TimelineScale({ duration }: { duration: number }) {
-  const markers = Array.from({ length: 7 }, (_, index) => {
-    const ratio = index / 6;
-    return {
-      left: `${ratio * 100}%`,
-      value: duration * ratio,
-    };
-  });
-
-  return (
-    <div className="relative h-6 rounded-[14px] border border-white/6 bg-black/20">
-      {markers.map((marker) => (
-        <div key={marker.left} className="absolute inset-y-0" style={{ left: marker.left }}>
-          <div className="h-full w-px bg-white/8" />
-          <span className="absolute left-1.5 top-1/2 -translate-y-1/2 font-['IBM_Plex_Mono'] text-[8px] text-stone-500">
-            {formatTimelineSeconds(marker.value)}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function TimelineTrack({
-  label,
-  emptyLabel,
-  items,
-  timelineDuration,
-  activeClipId,
-  onSelectClip,
-  onUpdateClip,
-}: {
-  label: string;
-  emptyLabel: string;
-  items: TimelineTrackItem[];
-  timelineDuration: number;
-  activeClipId?: string;
-  onSelectClip: (clipId?: string) => void;
-  onUpdateClip: (clipId: string, patch: Partial<EditorClip>) => void;
-}) {
-  const laneRef = useRef<HTMLDivElement>(null);
-  const [trimDrag, setTrimDrag] = useState<{
-    clip: EditorClip;
-    side: "start" | "end";
-    startX: number;
-  }>();
-
+  // Dismiss export dropdown
   useEffect(() => {
-    if (!trimDrag) {
+    if (!exportOpen) return undefined;
+    const dismiss = (e: PointerEvent) => { if (!exportDropRef.current?.contains(e.target as Node)) setExportOpen(false); };
+    window.addEventListener("pointerdown", dismiss);
+    return () => window.removeEventListener("pointerdown", dismiss);
+  }, [exportOpen]);
+
+  // Dismiss context menu
+  useEffect(() => {
+    if (!ctxMenu) return undefined;
+    const dismiss = () => setCtxMenu(undefined);
+    window.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", (e) => { if (e.key === "Escape") dismiss(); });
+    return () => { window.removeEventListener("pointerdown", dismiss); };
+  }, [ctxMenu]);
+
+  // Audio elements map for playback
+  const audioElementsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const currentTimeRef = useRef(currentTime);
+  currentTimeRef.current = currentTime;
+
+  // Keep audio element pool in sync with audio track items
+  useEffect(() => {
+    const map = audioElementsRef.current;
+    for (const item of audioTrack.items) {
+      const src = previewSources[item.clip.asset.id];
+      if (!src) continue;
+      let el = map.get(item.clip.id);
+      if (!el) {
+        el = document.createElement("audio");
+        el.preload = "auto";
+        el.src = src;
+        map.set(item.clip.id, el);
+      } else if (!el.src.includes(item.clip.asset.id)) {
+        el.src = src;
+      }
+    }
+    const activeIds = new Set(audioTrack.items.map((i) => i.clip.id));
+    for (const [id, el] of map) {
+      if (!activeIds.has(id)) { el.pause(); el.src = ""; map.delete(id); }
+    }
+  }, [audioTrack.items, previewSources]);
+
+  // Refs for data the RAF loop needs (avoids stale closures)
+  const audioTrackItemsRef = useRef(audioTrack.items);
+  audioTrackItemsRef.current = audioTrack.items;
+  const visualTrackItemsRef = useRef(visualTrack.items);
+  visualTrackItemsRef.current = visualTrack.items;
+
+  // Sync media helper — called from RAF loop, NOT from an effect
+  const syncMedia = useCallback((time: number) => {
+    // Audio sync
+    const map = audioElementsRef.current;
+    for (const item of audioTrackItemsRef.current) {
+      const el = map.get(item.clip.id);
+      if (!el) continue;
+      const trimStart = parseSecondsInput(item.clip.trimStart, 0) ?? 0;
+      const speed = getEditorClipSpeed(item.clip);
+      if (time >= item.start && time < item.end) {
+        const offset = trimStart + (time - item.start) * speed;
+        if (Math.abs(el.currentTime - offset) > 0.5) {
+          el.currentTime = offset;
+        }
+        el.playbackRate = speed;
+        if (el.paused) void el.play().catch(() => {});
+      } else {
+        if (!el.paused) el.pause();
+      }
+    }
+    // Video sync
+    const vid = videoPreviewRef.current;
+    if (vid) {
+      const visItem = findClipAtTime(visualTrackItemsRef.current, time);
+      if (visItem && visItem.clip.asset.kind === "video") {
+        const trimStart = parseSecondsInput(visItem.clip.trimStart, 0) ?? 0;
+        const speed = getEditorClipSpeed(visItem.clip);
+        const offset = trimStart + (time - visItem.start) * speed;
+        if (Math.abs(vid.currentTime - offset) > 0.5) {
+          vid.currentTime = offset;
+        }
+        vid.playbackRate = speed;
+        if (vid.paused) void vid.play().catch(() => {});
+      } else {
+        if (!vid.paused) vid.pause();
+      }
+    }
+  }, []);
+
+  // Playback RAF loop — advances time AND syncs media in one place
+  useEffect(() => {
+    if (!playing) {
+      lastFrameRef.current = undefined;
+      // Pause all audio
+      for (const el of audioElementsRef.current.values()) el.pause();
+      // Pause video
+      const vid = videoPreviewRef.current;
+      if (vid && !vid.paused) vid.pause();
       return undefined;
     }
-
-    const onPointerMove = (event: PointerEvent) => {
-      const width = laneRef.current?.getBoundingClientRect().width;
-      if (!width || width <= 0) {
-        return;
+    // Initial sync at play start
+    syncMedia(currentTimeRef.current);
+    let lastSyncTime = performance.now();
+    const tick = (now: number) => {
+      if (lastFrameRef.current !== undefined) {
+        const dt = (now - lastFrameRef.current) / 1000;
+        setCurrentTime((t) => {
+          const next = t + dt;
+          if (next >= timelineDuration) { setPlaying(false); return timelineDuration; }
+          currentTimeRef.current = next;
+          return next;
+        });
+        // Throttle media sync to every ~200ms to avoid constant play/pause churn
+        if (now - lastSyncTime > 200) {
+          syncMedia(currentTimeRef.current);
+          lastSyncTime = now;
+        }
       }
-      const deltaRatio = (event.clientX - trimDrag.startX) / width;
-      const deltaSeconds = deltaRatio * timelineDuration;
+      lastFrameRef.current = now;
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [playing, timelineDuration, syncMedia]);
+
+  // Cleanup audio elements on unmount
+  useEffect(() => {
+    const map = audioElementsRef.current;
+    return () => { for (const el of map.values()) { el.pause(); el.src = ""; } map.clear(); };
+  }, []);
+
+  // Spacebar play/pause
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !isEditableTarget(e.target)) {
+        e.preventDefault();
+        setPlaying((p) => !p);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  // Trim drag global handlers
+  useEffect(() => {
+    if (!trimDrag) return undefined;
+    const onPointerMove = (e: PointerEvent) => {
+      const width = tracksLaneRef.current?.getBoundingClientRect().width;
+      if (!width || width <= 0) return;
+      const deltaRatio = (e.clientX - trimDrag.startX) / width;
+      // Use frozen duration from drag start so rescaling doesn't cause drift
+      const deltaSeconds = deltaRatio * trimDrag.frozenDuration;
       onUpdateClip(trimDrag.clip.id, buildClipTrimPatch(trimDrag.clip, trimDrag.side, deltaSeconds));
     };
-
     const onPointerUp = () => setTrimDrag(undefined);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
+    return () => { window.removeEventListener("pointermove", onPointerMove); window.removeEventListener("pointerup", onPointerUp); };
+  }, [onUpdateClip, trimDrag]);
+
+  // Preview drag for subtitles and overlays
+  useEffect(() => {
+    if (!previewDrag) return undefined;
+    const onPointerMove = (e: PointerEvent) => {
+      const rect = previewContainerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const dx = ((e.clientX - previewDrag.startX) / rect.width) * 100;
+      const dy = ((e.clientY - previewDrag.startY) / rect.height) * 100;
+      const nx = Math.max(0, Math.min(100, previewDrag.origX + dx));
+      const ny = Math.max(0, Math.min(100, previewDrag.origY + dy));
+      if (previewDrag.type === "subtitle") onUpdateSubtitle(previewDrag.id, { x: nx, y: ny });
+      else onUpdateOverlay(previewDrag.id, { x: nx, y: ny });
     };
-  }, [onUpdateClip, timelineDuration, trimDrag]);
+    const onPointerUp = () => setPreviewDrag(undefined);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => { window.removeEventListener("pointermove", onPointerMove); window.removeEventListener("pointerup", onPointerUp); };
+  }, [previewDrag, onUpdateSubtitle, onUpdateOverlay]);
+
+  // Overlay resize drag
+  useEffect(() => {
+    if (!resizeDrag) return undefined;
+    const onPointerMove = (e: PointerEvent) => {
+      const rect = previewContainerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const dw = ((e.clientX - resizeDrag.startX) / rect.width) * 100;
+      const dh = ((e.clientY - resizeDrag.startY) / rect.height) * 100;
+      const nw = Math.max(5, Math.min(100, resizeDrag.origW + dw));
+      const nh = Math.max(5, Math.min(100, resizeDrag.origH + dh));
+      onUpdateOverlay(resizeDrag.id, { width: nw, height: nh });
+    };
+    const onPointerUp = () => setResizeDrag(undefined);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => { window.removeEventListener("pointermove", onPointerMove); window.removeEventListener("pointerup", onPointerUp); };
+  }, [resizeDrag, onUpdateOverlay]);
+
+  // Subtitle timeline drag (left/right)
+  useEffect(() => {
+    if (!subDrag) return undefined;
+    const onPointerMove = (e: PointerEvent) => {
+      const rect = tracksLaneRef.current?.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+      const deltaRatio = (e.clientX - subDrag.startX) / rect.width;
+      const deltaSecs = deltaRatio * timelineDuration;
+      const dur = subDrag.origEnd - subDrag.origStart;
+      const newStart = Math.max(0, subDrag.origStart + deltaSecs);
+      onUpdateSubtitle(subDrag.id, { start: newStart, end: newStart + dur });
+    };
+    const onPointerUp = () => setSubDrag(undefined);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => { window.removeEventListener("pointermove", onPointerMove); window.removeEventListener("pointerup", onPointerUp); };
+  }, [subDrag, timelineDuration, onUpdateSubtitle]);
+
+  // Overlay timeline trim drag
+  useEffect(() => {
+    if (!ovTrimDrag) return undefined;
+    const onPointerMove = (e: PointerEvent) => {
+      const rect = tracksLaneRef.current?.getBoundingClientRect();
+      if (!rect || rect.width <= 0) return;
+      const deltaRatio = (e.clientX - ovTrimDrag.startX) / rect.width;
+      const deltaSecs = deltaRatio * timelineDuration;
+      if (ovTrimDrag.side === "start") {
+        const newStart = Math.max(0, Math.min(ovTrimDrag.origEnd - 0.5, ovTrimDrag.origStart + deltaSecs));
+        onUpdateOverlay(ovTrimDrag.id, { start: newStart });
+      } else {
+        const newEnd = Math.max(ovTrimDrag.origStart + 0.5, ovTrimDrag.origEnd + deltaSecs);
+        onUpdateOverlay(ovTrimDrag.id, { end: newEnd });
+      }
+    };
+    const onPointerUp = () => setOvTrimDrag(undefined);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => { window.removeEventListener("pointermove", onPointerMove); window.removeEventListener("pointerup", onPointerUp); };
+  }, [ovTrimDrag, timelineDuration, onUpdateOverlay]);
+
+  // Cmd/Ctrl + scroll wheel zoom on tracks
+  useEffect(() => {
+    const el = tracksLaneRef.current;
+    if (!el) return undefined;
+    const onWheel = (e: WheelEvent) => {
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
+        setTimelineZoom((z) => Math.max(50, Math.min(800, z + (e.deltaY < 0 ? 25 : -25))));
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Clip drag-to-reorder global handlers
+  useEffect(() => {
+    if (!clipDrag) return undefined;
+    const onPointerMove = (e: PointerEvent) => setClipDrag((d) => d ? { ...d, currentX: e.clientX } : d);
+    const onPointerUp = () => {
+      if (clipDrag && tracksLaneRef.current) {
+        const rect = tracksLaneRef.current.getBoundingClientRect();
+        const ratio = (clipDrag.currentX - rect.left) / rect.width;
+        const targetTime = Math.max(0, ratio * timelineDuration);
+        const isVisualTrack = clipDrag.track === "visual";
+        const trackClips = clips.filter((c) => isVisualTrack ? c.asset.kind !== "audio" : c.asset.kind === "audio");
+        const otherClips = clips.filter((c) => isVisualTrack ? c.asset.kind === "audio" : c.asset.kind !== "audio");
+        const movingClip = trackClips.find((c) => c.id === clipDrag.clipId);
+        if (movingClip) {
+          const remaining = trackClips.filter((c) => c.id !== clipDrag.clipId);
+          let insertIdx = remaining.length;
+          let cursor = 0;
+          for (let i = 0; i < remaining.length; i++) {
+            const dur = getEditorClipDuration(remaining[i]);
+            if (targetTime < cursor + dur / 2) { insertIdx = i; break; }
+            cursor += dur;
+          }
+          remaining.splice(insertIdx, 0, movingClip);
+          // Rebuild full clips array: reordered track clips interleaved with other track clips in original order
+          const merged: EditorClip[] = [];
+          let ti = 0, oi = 0;
+          for (const c of clips) {
+            const belongsToTrack = isVisualTrack ? c.asset.kind !== "audio" : c.asset.kind === "audio";
+            if (belongsToTrack) {
+              if (ti < remaining.length) merged.push(remaining[ti++]);
+            } else {
+              if (oi < otherClips.length) merged.push(otherClips[oi++]);
+            }
+          }
+          while (ti < remaining.length) merged.push(remaining[ti++]);
+          while (oi < otherClips.length) merged.push(otherClips[oi++]);
+          onReorderClips(merged);
+        }
+      }
+      setClipDrag(undefined);
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => { window.removeEventListener("pointermove", onPointerMove); window.removeEventListener("pointerup", onPointerUp); };
+  }, [clipDrag, clips, onReorderClips, timelineDuration]);
+
+  // (playhead clip lookups moved above effects)
+
+  // Active subtitle at playhead
+  const activeSubtitle = subtitleClips.find((s) => currentTime >= s.start && currentTime < s.end);
+
+  const handleSeek = (e: React.MouseEvent) => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    setCurrentTime(ratio * timelineDuration);
+    setPlaying(false);
+  };
+
+  const handleExport = () => {
+    void (async () => {
+      try {
+        await exportEditorTimeline({
+          title: exportTitle.trim() || "Editor Export",
+          categoryId: exportCategoryId || undefined,
+          clips: clips.map((clip) => ({
+            assetId: clip.asset.id,
+            kind: clip.asset.kind,
+            filePath: clip.asset.filePath,
+            trimStart: Number.isFinite(Number(clip.trimStart)) ? Number(clip.trimStart) : 0,
+            trimEnd: clip.trimEnd.trim() && Number.isFinite(Number(clip.trimEnd)) ? Number(clip.trimEnd) : undefined,
+            stillDuration: clip.asset.kind === "image" && Number.isFinite(Number(clip.stillDuration)) ? Number(clip.stillDuration) : 3,
+          })),
+          overlays: overlayClips.length ? overlayClips.map((ov) => ({
+            filePath: ov.filePath,
+            start: ov.start,
+            end: ov.end,
+            x: ov.x,
+            y: ov.y,
+            width: ov.width,
+          })) : undefined,
+        });
+        setExportToast("Video exported successfully");
+        setTimeout(() => setExportToast(undefined), 3000);
+      } catch {
+        setExportToast("Export failed");
+        setTimeout(() => setExportToast(undefined), 4000);
+      }
+    })();
+    setExportOpen(false);
+  };
+
+  // Context menu actions
+  const handleCtxAction = (action: string) => {
+    if (!ctxMenu) return;
+    const clip = clips.find((c) => c.id === ctxMenu.clipId);
+    if (!clip && action !== "paste") return;
+    switch (action) {
+      case "speed-125": if (clip) onUpdateClip(clip.id, { speed: String(getEditorClipSpeed(clip) * 1.25) }); break;
+      case "speed-150": if (clip) onUpdateClip(clip.id, { speed: "1.5" }); break;
+      case "speed-200": if (clip) onUpdateClip(clip.id, { speed: "2" }); break;
+      case "slow-075": if (clip) onUpdateClip(clip.id, { speed: String(getEditorClipSpeed(clip) * 0.75) }); break;
+      case "slow-050": if (clip) onUpdateClip(clip.id, { speed: "0.5" }); break;
+      case "slow-025": if (clip) onUpdateClip(clip.id, { speed: "0.25" }); break;
+      case "reset-speed": if (clip) onUpdateClip(clip.id, { speed: "1" }); break;
+      case "copy": if (clip) clipboardRef.current = { ...clip }; break;
+      case "paste": {
+        const cb = clipboardRef.current;
+        if (cb) {
+          const newClip = createEditorClip(cb.asset);
+          newClip.trimStart = cb.trimStart;
+          newClip.trimEnd = cb.trimEnd;
+          newClip.stillDuration = cb.stillDuration;
+          newClip.speed = cb.speed;
+          chrome?.openEditorAsset(cb.asset);
+        }
+        break;
+      }
+      case "delete": if (clip) onRemoveClip(clip.id); break;
+      case "split": {
+        if (!clip) break;
+        // Find the track item and split at playhead
+        const allItems = [...visualTrack.items, ...audioTrack.items];
+        const item = allItems.find((it) => it.clip.id === clip.id);
+        if (!item || currentTime <= item.start || currentTime >= item.end) break;
+        const splitPoint = currentTime - item.start;
+        const originalStart = parseSecondsInput(clip.trimStart, 0) ?? 0;
+        onUpdateClip(clip.id, { trimEnd: formatEditableDuration(originalStart + splitPoint) });
+        const newClip = createEditorClip(clip.asset);
+        newClip.trimStart = formatEditableDuration(originalStart + splitPoint);
+        newClip.trimEnd = clip.trimEnd;
+        newClip.speed = clip.speed;
+        chrome?.openEditorAsset(clip.asset);
+        break;
+      }
+      case "move-to-overlay": {
+        if (!clip || clip.asset.kind !== "image") break;
+        const ov: OverlayClip = {
+          id: `ov-${Date.now()}`,
+          assetId: clip.asset.id,
+          filePath: clip.asset.filePath,
+          start: 0, end: 5,
+          x: 50, y: 50, width: 30, height: 30,
+        };
+        onAddOverlay(ov);
+        onRemoveClip(clip.id);
+        break;
+      }
+      case "move-to-visual": {
+        const ovClip = overlayClips.find((o) => o.id === ctxMenu.clipId);
+        if (!ovClip) break;
+        const imgAsset: MediaAsset = {
+          id: ovClip.assetId,
+          kind: "image",
+          modelId: "overlay",
+          prompt: "Image overlay",
+          filePath: ovClip.filePath,
+          status: "completed",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        onAddClip(createEditorClip(imgAsset));
+        onRemoveOverlay(ovClip.id);
+        break;
+      }
+      case "extract-audio": {
+        if (!clip || clip.asset.kind !== "video") break;
+        void (async () => {
+          try {
+            const extracted = await api.extractAudio(clip.asset.filePath);
+            chrome?.openEditorAsset(extracted);
+          } catch (err) {
+            console.error("Failed to extract audio:", err);
+          }
+        })();
+        break;
+      }
+    }
+    setCtxMenu(undefined);
+  };
+
+  const renderTrackClips = (items: TimelineTrackItem[], trackType: "visual" | "audio") =>
+    items.length ? (
+      items.map((item) => {
+        const width = Math.max((item.duration / timelineDuration) * 100, 1);
+        const left = (item.start / timelineDuration) * 100;
+        const accent =
+          item.clip.asset.kind === "image"
+            ? "border-emerald-300/20 bg-emerald-300/12 text-emerald-50"
+            : item.clip.asset.kind === "video"
+              ? "border-sky-300/20 bg-sky-300/12 text-sky-50"
+              : "border-amber-300/20 bg-amber-300/12 text-amber-50";
+        const isDragging = clipDrag?.clipId === item.clip.id;
+        const speedLabel = getEditorClipSpeed(item.clip) !== 1 ? ` · ${getEditorClipSpeed(item.clip).toFixed(2)}×` : "";
+
+        return (
+          <button
+            key={item.clip.id}
+            type="button"
+            onClick={() => { onSelectClip(item.clip.id); setCurrentTime(item.start); }}
+            onContextMenu={(e) => { e.preventDefault(); onSelectClip(item.clip.id); setCtxMenu({ clipId: item.clip.id, trackType, x: e.clientX, y: e.clientY }); }}
+            onPointerDown={(e) => {
+              if (e.button === 0) {
+                e.stopPropagation();
+                setClipDrag({ clipId: item.clip.id, startX: e.clientX, currentX: e.clientX, track: trackType });
+              }
+            }}
+            className={clsx(
+              "absolute bottom-1.5 top-1.5 overflow-hidden rounded-[14px] border px-2 py-1 text-left transition cursor-grab",
+              isDragging ? "opacity-60 ring-2 ring-amber-300/30" : "",
+              item.clip.id === activeClipId ? accent : "border-white/10 bg-white/[0.04] text-stone-200 hover:bg-white/[0.08]",
+            )}
+            style={{
+              left: `${Math.min(left, 96)}%`,
+              width: `${Math.min(width, 100 - Math.min(left, 96))}%`,
+            }}
+          >
+            <span
+              className="absolute inset-y-1 left-0 w-1.5 cursor-ew-resize rounded-l-[14px] bg-white/0 transition hover:bg-white/15"
+              onPointerDown={(e) => { e.stopPropagation(); setTrimDrag({ clip: item.clip, side: "start", startX: e.clientX, frozenDuration: timelineDuration }); }}
+            />
+            <span
+              className="absolute inset-y-1 right-0 w-1.5 cursor-ew-resize rounded-r-[14px] bg-white/0 transition hover:bg-white/15"
+              onPointerDown={(e) => { e.stopPropagation(); setTrimDrag({ clip: item.clip, side: "end", startX: e.clientX, frozenDuration: timelineDuration }); }}
+            />
+            <p className="truncate font-['IBM_Plex_Mono'] text-[8px] uppercase tracking-[0.16em] text-current/70">
+              {formatTimelineSeconds(item.start)}–{formatTimelineSeconds(item.end)}{speedLabel}
+            </p>
+            <p className="mt-0.5 line-clamp-1 text-[9px] leading-4">{item.clip.asset.prompt}</p>
+          </button>
+        );
+      })
+    ) : (
+      <div className="flex h-full min-h-[44px] items-center justify-center rounded-[12px] border border-dashed border-white/8 bg-white/[0.02] text-[9px] text-stone-500">
+        {trackType === "visual" ? "Drop image/video clips here" : "Drop audio clips here"}
+      </div>
+    );
+
+  // Ruler markers
+  const rulerCount = Math.max(7, Math.round(timelineZoom / 15));
+  const rulers = Array.from({ length: rulerCount }, (_, i) => {
+    const ratio = i / (rulerCount - 1);
+    return { left: `${ratio * 100}%`, value: timelineDuration * ratio };
+  });
 
   return (
-    <div className="grid gap-2 md:grid-cols-[88px_minmax(0,1fr)]">
-      <div className="flex items-center rounded-[16px] border border-white/8 bg-black/20 px-3 py-3">
-        <p className="font-['IBM_Plex_Mono'] text-[10px] uppercase tracking-[0.22em] text-stone-400">{label}</p>
-      </div>
-      <div
-        ref={laneRef}
-        className="relative min-h-[84px] rounded-[18px] border border-white/8 bg-[linear-gradient(180deg,rgba(9,10,12,0.95),rgba(6,7,9,0.98))] p-2.5"
-      >
-        {items.length ? (
-          items.map((item) => {
-            const width = Math.max((item.duration / timelineDuration) * 100, 10);
-            const left = (item.start / timelineDuration) * 100;
-            const accent =
-              item.clip.asset.kind === "image"
-                ? "border-emerald-300/20 bg-emerald-300/12 text-emerald-50"
-                : item.clip.asset.kind === "video"
-                  ? "border-sky-300/20 bg-sky-300/12 text-sky-50"
-                  : "border-amber-300/20 bg-amber-300/12 text-amber-50";
-
-            return (
-              <button
-                key={item.clip.id}
-                type="button"
-                onClick={() => onSelectClip(item.clip.id)}
-                className={clsx(
-                  "absolute bottom-2.5 top-2.5 overflow-hidden rounded-[16px] border px-2.5 py-1.5 text-left transition",
-                  item.clip.id === activeClipId ? accent : "border-white/10 bg-white/[0.04] text-stone-200 hover:bg-white/[0.08]",
-                )}
-                style={{
-                  left: `${Math.min(left, 92)}%`,
-                  width: `${Math.min(width, 100 - left)}%`,
-                }}
-              >
-                <span
-                  className="absolute inset-y-1.5 left-0 w-2 cursor-ew-resize rounded-l-[16px] bg-white/0 transition hover:bg-white/10"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    setTrimDrag({ clip: item.clip, side: "start", startX: event.clientX });
-                  }}
-                />
-                <span
-                  className="absolute inset-y-1.5 right-0 w-2 cursor-ew-resize rounded-r-[16px] bg-white/0 transition hover:bg-white/10"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    setTrimDrag({ clip: item.clip, side: "end", startX: event.clientX });
-                  }}
-                />
-                <p className="font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.18em] text-current/75">
-                  {formatTimelineSeconds(item.start)} - {formatTimelineSeconds(item.end)}
-                </p>
-                <p className="mt-1 line-clamp-2 text-[10px] leading-5">{item.clip.asset.prompt}</p>
-              </button>
-            );
-          })
-        ) : (
-          <div className="flex h-full min-h-[78px] items-center justify-center rounded-[14px] border border-dashed border-white/8 bg-white/[0.02] text-[10px] text-stone-500">
-            {emptyLabel}
+    <section className="flex h-full min-h-0 flex-col overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 border-b border-white/6 px-3 py-2.5">
+        <div className="flex items-center gap-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.35em] text-[#84a09b]">Editor</p>
+            <h2 className="text-[15px] font-semibold text-stone-100">Media Editor</h2>
           </div>
-        )}
+          <div className="flex gap-1.5 text-[9px] text-stone-400">
+            <span className="rounded-full border border-white/7 bg-white/[0.03] px-2 py-0.5">{visualTrack.items.length} visual</span>
+            <span className="rounded-full border border-white/7 bg-white/[0.03] px-2 py-0.5">{audioTrack.items.length} audio</span>
+            <span className="rounded-full border border-white/7 bg-white/[0.03] px-2 py-0.5">{subtitleClips.length} subs</span>
+            <span className="rounded-full border border-white/7 bg-white/[0.03] px-2 py-0.5 font-['IBM_Plex_Mono']">{formatTimelineSeconds(timelineDuration)}</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={importing}
+          onClick={async () => {
+            try {
+              const selection = await openDialog({
+                multiple: false,
+                filters: [{ name: "Media", extensions: ["mp4", "mov", "mp3", "wav", "png", "jpg", "jpeg", "gif", "webp"] }],
+              });
+              if (typeof selection === "string") {
+                setImporting(true);
+                try { const asset = await importLocalMediaAsset(selection); if (asset) chrome?.openEditorAsset(asset); }
+                finally { setImporting(false); }
+              }
+            } catch (err) { console.error("Failed to import media:", err); }
+          }}
+          className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/18 bg-emerald-300/10 px-2.5 py-1 text-[10px] text-emerald-50 transition hover:bg-emerald-300/16 disabled:opacity-50"
+        >
+          <FolderPlus className="h-3 w-3" />
+          {importing ? "Importing…" : "Import"}
+        </button>
       </div>
-    </div>
+
+      {/* Preview */}
+      <div className="relative flex h-[280px] shrink-0 items-center justify-center overflow-hidden border-b border-white/6 bg-[radial-gradient(circle_at_top,rgba(38,56,54,0.18),rgba(3,5,7,0.98)_62%)]">
+        {/* Aspect ratio toggle */}
+        <div className="absolute right-2 top-2 z-10 flex rounded-lg border border-white/8 bg-black/50 text-[8px]">
+          <button type="button" onClick={() => onSetEditorAspect("landscape")} className={clsx("rounded-l-lg px-2 py-1 transition", editorAspect === "landscape" ? "bg-white/15 text-stone-100" : "text-stone-400 hover:text-stone-200")}>16:9</button>
+          <button type="button" onClick={() => onSetEditorAspect("vertical")} className={clsx("rounded-r-lg px-2 py-1 transition", editorAspect === "vertical" ? "bg-white/15 text-stone-100" : "text-stone-400 hover:text-stone-200")}>9:16</button>
+        </div>
+        {/* Preview container with aspect ratio */}
+        <div
+          ref={previewContainerRef}
+          className="relative overflow-hidden rounded-lg border border-white/5 bg-black"
+          style={editorAspect === "landscape" ? { width: "min(100%, 497px)", aspectRatio: "16/9" } : { height: "100%", aspectRatio: "9/16" }}
+        >
+          {previewClip && previewSrc ? (
+            previewClip.asset.kind === "video" ? (
+              <video ref={videoPreviewRef} src={previewSrc} muted className="h-full w-full object-contain" />
+            ) : previewClip.asset.kind === "audio" ? (
+              <div className="flex h-full w-full flex-col items-center justify-center gap-3">
+                <div className="flex h-14 w-14 items-center justify-center rounded-full border border-amber-300/20 bg-amber-300/10 text-amber-100">
+                  <AudioLines className="h-6 w-6" />
+                </div>
+                <p className="max-w-xs text-center text-[11px] text-stone-300">{previewClip.asset.prompt}</p>
+                <audio ref={audioPreviewRef} src={previewSrc} />
+              </div>
+            ) : (
+              <img src={previewSrc} alt={previewClip.asset.prompt} className="h-full w-full object-contain" />
+            )
+          ) : (
+            <div className="flex h-full w-full items-center justify-center">
+              <p className="text-[11px] text-stone-500">{clips.length ? "Loading preview…" : "Add clips to begin editing"}</p>
+            </div>
+          )}
+          {/* Overlay images on preview */}
+          {overlayClips.filter((ov) => currentTime >= ov.start && currentTime < ov.end).map((ov) => {
+            const ovSrc = previewSources[ov.assetId];
+            if (!ovSrc) return null;
+            const isActive = activeOverlayId === ov.id;
+            return (
+              <div
+                key={ov.id}
+                className={clsx("absolute cursor-move select-none", isActive ? "ring-2 ring-pink-400 rounded" : "")}
+                style={{ left: `${ov.x}%`, top: `${ov.y}%`, width: `${ov.width}%`, transform: "translate(-50%, -50%)" }}
+                onPointerDown={(e) => { e.stopPropagation(); setActiveOverlayId(ov.id); setPreviewDrag({ type: "overlay", id: ov.id, startX: e.clientX, startY: e.clientY, origX: ov.x, origY: ov.y }); }}
+              >
+                <img src={ovSrc} alt="overlay" className="h-full w-full object-contain" draggable={false} />
+                {isActive ? (
+                  <div
+                    className="absolute -bottom-1.5 -right-1.5 h-3.5 w-3.5 cursor-nwse-resize rounded-full border-2 border-pink-400 bg-pink-900"
+                    onPointerDown={(e) => { e.stopPropagation(); setResizeDrag({ id: ov.id, startX: e.clientX, startY: e.clientY, origW: ov.width, origH: ov.height }); }}
+                  />
+                ) : null}
+              </div>
+            );
+          })}
+          {/* Subtitle overlay — draggable with font size controls */}
+          {activeSubtitle ? (
+            <div
+              className="absolute z-10 select-none"
+              style={{ left: `${activeSubtitle.x}%`, top: `${activeSubtitle.y}%`, transform: "translate(-50%, -50%)" }}
+            >
+              <div
+                className="cursor-move rounded-lg bg-black/70 px-4 py-2 font-medium text-white"
+                style={{ fontSize: `${activeSubtitle.fontSize ?? 16}px` }}
+                onPointerDown={(e) => { e.stopPropagation(); setPreviewDrag({ type: "subtitle", id: activeSubtitle.id, startX: e.clientX, startY: e.clientY, origX: activeSubtitle.x, origY: activeSubtitle.y }); }}
+              >
+                {activeSubtitle.text}
+              </div>
+              {/* Font size controls */}
+              <div className="mt-1 flex items-center justify-center gap-1">
+                <button type="button" onClick={(e) => { e.stopPropagation(); onUpdateSubtitle(activeSubtitle.id, { fontSize: Math.max(8, (activeSubtitle.fontSize ?? 16) - 2) }); }} className="flex h-5 w-5 items-center justify-center rounded bg-black/60 text-[10px] text-white/70 hover:text-white">−</button>
+                <span className="text-[8px] text-white/50">{activeSubtitle.fontSize ?? 16}px</span>
+                <button type="button" onClick={(e) => { e.stopPropagation(); onUpdateSubtitle(activeSubtitle.id, { fontSize: Math.min(72, (activeSubtitle.fontSize ?? 16) + 2) }); }} className="flex h-5 w-5 items-center justify-center rounded bg-black/60 text-[10px] text-white/70 hover:text-white">+</button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Transport controls */}
+      <div className="flex items-center justify-center gap-3 border-b border-white/6 px-3 py-2">
+        <button type="button" onClick={() => { setCurrentTime(0); setPlaying(false); }} className="rounded-lg p-1 text-stone-400 transition hover:bg-white/8 hover:text-stone-200">
+          <SkipBack className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setPlaying((p) => !p)}
+          className="flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/20 bg-amber-300/12 text-amber-50 transition hover:bg-amber-300/20"
+        >
+          {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
+        </button>
+        <button type="button" onClick={() => { setCurrentTime(timelineDuration); setPlaying(false); }} className="rounded-lg p-1 text-stone-400 transition hover:bg-white/8 hover:text-stone-200">
+          <SkipForward className="h-4 w-4" />
+        </button>
+        <span className="font-['IBM_Plex_Mono'] text-[11px] text-stone-300">
+          {formatTimelineSeconds(currentTime)} / {formatTimelineSeconds(timelineDuration)}
+        </span>
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex items-center justify-between gap-2 border-b border-white/6 px-3 py-1.5">
+        <div className="flex items-center gap-2">
+          {/* Zoom */}
+          <button type="button" onClick={() => setTimelineZoom((z) => Math.max(50, z - 25))} className="rounded-lg p-1 text-stone-400 hover:bg-white/8 hover:text-stone-200">
+            <ZoomOut className="h-3.5 w-3.5" />
+          </button>
+          <span className="font-['IBM_Plex_Mono'] text-[9px] text-stone-400">{timelineZoom}%</span>
+          <button type="button" onClick={() => setTimelineZoom((z) => Math.min(800, z + 25))} className="rounded-lg p-1 text-stone-400 hover:bg-white/8 hover:text-stone-200">
+            <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+          <div className="mx-1 h-4 w-px bg-white/8" />
+          {/* Add subtitle */}
+          <button
+            type="button"
+            onClick={() => {
+              const sub: SubtitleClip = { id: `sub-${Date.now()}`, text: "Subtitle", start: currentTime, end: Math.min(currentTime + 3, timelineDuration), x: 50, y: 90, fontSize: 16 };
+              onAddSubtitle(sub);
+              setEditingSubId(sub.id);
+              setEditingSubText(sub.text);
+            }}
+            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[9px] text-stone-400 hover:bg-white/8 hover:text-stone-200"
+          >
+            <Captions className="h-3.5 w-3.5" />
+            Subtitle
+          </button>
+          {/* Add image overlay */}
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const selection = await openDialog({
+                  multiple: false,
+                  filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }],
+                });
+                if (typeof selection === "string") {
+                  const asset = await importLocalMediaAsset(selection);
+                  if (asset) {
+                    const ov: OverlayClip = {
+                      id: `ov-${Date.now()}`,
+                      assetId: asset.id,
+                      filePath: asset.filePath,
+                      start: currentTime,
+                      end: Math.min(currentTime + 5, timelineDuration || 5),
+                      x: 50, y: 50, width: 30, height: 30,
+                    };
+                    onAddOverlay(ov);
+                    setActiveOverlayId(ov.id);
+                  }
+                }
+              } catch (err) { console.error("Failed to add overlay:", err); }
+            }}
+            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[9px] text-stone-400 hover:bg-white/8 hover:text-stone-200"
+          >
+            <ImagePlus className="h-3.5 w-3.5" />
+            Overlay
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Export dropdown */}
+          <div className="relative" ref={exportDropRef}>
+            <button
+              type="button"
+              onClick={() => setExportOpen((o) => !o)}
+              disabled={!clips.length || exportingEditor}
+              className="inline-flex items-center gap-1 rounded-lg border border-amber-300/18 bg-amber-300/10 px-2.5 py-1 text-[9px] font-semibold text-amber-50 transition hover:bg-amber-300/16 disabled:opacity-50"
+            >
+              <Download className="h-3 w-3" />
+              {exportingEditor ? "Exporting…" : "Export"}
+            </button>
+            {exportOpen ? (
+              <div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-xl border border-white/10 bg-[#0f1012] p-2.5 shadow-2xl">
+                <input value={exportTitle} onChange={(e) => setExportTitle(e.target.value)} placeholder="Title" className="w-full rounded-lg border border-white/8 bg-black/30 px-2 py-1.5 text-[10px] text-stone-100 outline-none focus:border-amber-300/35" />
+                <select value={exportCategoryId} onChange={(e) => setExportCategoryId(e.target.value)} className="mt-1.5 w-full rounded-lg border border-white/8 bg-black/30 px-2 py-1.5 text-[10px] text-stone-100 outline-none">
+                  <option value="">Auto-categorize</option>
+                  {mediaCategories.map((cat) => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
+                </select>
+                <button type="button" onClick={handleExport} disabled={exportingEditor} className="mt-1.5 w-full rounded-lg border border-amber-300/20 bg-amber-300/12 px-2 py-1.5 text-[10px] font-semibold text-amber-50 hover:bg-amber-300/18 disabled:opacity-50">
+                  Export Video
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <button type="button" onClick={onClear} disabled={!clips.length || exportingEditor} className="rounded-lg px-2 py-1 text-[9px] text-stone-400 hover:bg-white/8 hover:text-rose-300 disabled:opacity-50">
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {/* Tracks */}
+      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto">
+        <div style={{ minWidth: `${timelineZoom}%` }} className="relative px-2.5 py-2">
+          {/* Ruler */}
+          <div className="relative h-5 rounded-[10px] border border-white/6 bg-black/20" onClick={handleSeek}>
+            {rulers.map((m) => (
+              <div key={m.left} className="absolute inset-y-0" style={{ left: m.left }}>
+                <div className="h-full w-px bg-white/8" />
+                <span className="absolute left-1 top-1/2 -translate-y-1/2 font-['IBM_Plex_Mono'] text-[7px] text-stone-500">{formatTimelineSeconds(m.value)}</span>
+              </div>
+            ))}
+            {/* Playhead on ruler */}
+            <div className="absolute inset-y-0 z-10 w-0.5 bg-amber-400" style={{ left: `${(currentTime / timelineDuration) * 100}%` }} />
+          </div>
+
+          {/* Track lanes — labels left, lanes + playhead right */}
+          <div className="mt-2 grid gap-x-1.5 gap-y-1.5 md:grid-cols-[72px_minmax(0,1fr)]">
+            {/* Track labels column */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex min-h-[52px] items-center rounded-[10px] border border-white/8 bg-black/20 px-2 py-2">
+                <p className="font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.2em] text-stone-400">Visual</p>
+              </div>
+              <div className="flex min-h-[52px] items-center rounded-[10px] border border-white/8 bg-black/20 px-2 py-2">
+                <p className="font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.2em] text-stone-400">Audio</p>
+              </div>
+              <div className="flex min-h-[52px] items-center rounded-[10px] border border-white/8 bg-black/20 px-2 py-2">
+                <p className="font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.2em] text-stone-400">Overlay</p>
+              </div>
+              <div className="flex min-h-[52px] items-center rounded-[10px] border border-white/8 bg-black/20 px-2 py-2">
+                <p className="font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.2em] text-stone-400">Subs</p>
+              </div>
+            </div>
+
+            {/* Lanes + playhead column */}
+            <div ref={tracksLaneRef} className="relative flex flex-col gap-1.5" onClick={handleSeek}>
+              {/* Playhead line */}
+              <div
+                className="pointer-events-none absolute inset-y-0 z-20 w-0.5 bg-amber-400/80"
+                style={{ left: `${(currentTime / timelineDuration) * 100}%` }}
+              >
+                <div className="absolute -left-1 -top-0.5 h-2.5 w-2.5 rounded-full bg-amber-400" />
+              </div>
+
+              {/* Visual lane */}
+              <div className="relative min-h-[52px] rounded-[12px] border border-white/8 bg-[linear-gradient(180deg,rgba(9,10,12,0.95),rgba(6,7,9,0.98))] p-1.5">
+                {renderTrackClips(visualTrack.items, "visual")}
+              </div>
+
+              {/* Audio lane */}
+              <div className="relative min-h-[52px] rounded-[12px] border border-white/8 bg-[linear-gradient(180deg,rgba(9,10,12,0.95),rgba(6,7,9,0.98))] p-1.5">
+                {renderTrackClips(audioTrack.items, "audio")}
+              </div>
+
+              {/* Overlay lane */}
+              <div className="relative min-h-[52px] rounded-[12px] border border-white/8 bg-[linear-gradient(180deg,rgba(9,10,12,0.95),rgba(6,7,9,0.98))] p-1.5">
+                {overlayClips.length ? (
+                  overlayClips.map((ov) => {
+                    const left = (ov.start / timelineDuration) * 100;
+                    const width = Math.max(((ov.end - ov.start) / timelineDuration) * 100, 4);
+                    return (
+                      <button
+                        key={ov.id}
+                        type="button"
+                        className={clsx(
+                          "absolute bottom-1.5 top-1.5 overflow-hidden rounded-[10px] border px-2 py-1 text-left cursor-grab",
+                          activeOverlayId === ov.id
+                            ? "border-pink-300/30 bg-pink-300/15 text-pink-50"
+                            : "border-pink-300/20 bg-pink-300/10 text-pink-50 hover:bg-pink-300/15",
+                        )}
+                        style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }}
+                        onClick={(e) => { e.stopPropagation(); setActiveOverlayId(ov.id); setCurrentTime(ov.start); }}
+                        onContextMenu={(e) => {
+                          e.preventDefault(); e.stopPropagation();
+                          setCtxMenu({ clipId: ov.id, trackType: "overlay", x: e.clientX, y: e.clientY });
+                        }}
+                      >
+                        {/* Left trim handle */}
+                        <span
+                          className="absolute inset-y-1 left-0 w-1.5 cursor-ew-resize rounded-l-[10px] bg-white/0 transition hover:bg-white/15"
+                          onPointerDown={(e) => { e.stopPropagation(); setOvTrimDrag({ id: ov.id, side: "start", startX: e.clientX, origStart: ov.start, origEnd: ov.end }); }}
+                        />
+                        {/* Right trim handle */}
+                        <span
+                          className="absolute inset-y-1 right-0 w-1.5 cursor-ew-resize rounded-r-[10px] bg-white/0 transition hover:bg-white/15"
+                          onPointerDown={(e) => { e.stopPropagation(); setOvTrimDrag({ id: ov.id, side: "end", startX: e.clientX, origStart: ov.start, origEnd: ov.end }); }}
+                        />
+                        <p className="truncate font-['IBM_Plex_Mono'] text-[8px] text-current/70">{formatTimelineSeconds(ov.start)}–{formatTimelineSeconds(ov.end)}</p>
+                        <p className="truncate text-[9px] leading-4">Image overlay</p>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="flex h-full min-h-[44px] items-center justify-center rounded-[10px] border border-dashed border-white/8 bg-white/[0.02] text-[9px] text-stone-500">
+                    Drag images here for overlays
+                  </div>
+                )}
+              </div>
+
+              {/* Subtitle lane */}
+              <div className="relative min-h-[52px] rounded-[12px] border border-white/8 bg-[linear-gradient(180deg,rgba(9,10,12,0.95),rgba(6,7,9,0.98))] p-1.5">
+                {subtitleClips.length ? (
+                  subtitleClips.map((sub) => {
+                    const left = (sub.start / timelineDuration) * 100;
+                    const width = Math.max(((sub.end - sub.start) / timelineDuration) * 100, 4);
+                    return (
+                      <div
+                        key={sub.id}
+                        className={clsx(
+                          "absolute bottom-1.5 top-1.5 overflow-hidden rounded-[10px] border px-2 py-1 text-left cursor-pointer",
+                          editingSubId === sub.id
+                            ? "border-violet-300/30 bg-violet-300/15 text-violet-50"
+                            : "border-violet-300/15 bg-violet-300/8 text-violet-100 hover:bg-violet-300/12",
+                        )}
+                        style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%`, cursor: "grab" }}
+                        onClick={(e) => { e.stopPropagation(); setEditingSubId(sub.id); setEditingSubText(sub.text); setCurrentTime(sub.start); }}
+                        onPointerDown={(e) => { if (e.button === 0 && editingSubId !== sub.id) { e.stopPropagation(); setSubDrag({ id: sub.id, startX: e.clientX, origStart: sub.start, origEnd: sub.end }); } }}
+                        onContextMenu={(e) => {
+                          e.preventDefault(); e.stopPropagation();
+                          setCtxMenu({ clipId: sub.id, trackType: "subtitle", x: e.clientX, y: e.clientY });
+                        }}
+                      >
+                        {editingSubId === sub.id ? (
+                          <input
+                            autoFocus
+                            value={editingSubText}
+                            onChange={(e) => setEditingSubText(e.target.value)}
+                            onBlur={() => { onUpdateSubtitle(sub.id, { text: editingSubText }); setEditingSubId(undefined); }}
+                            onKeyDown={(e) => { if (e.key === "Enter") { onUpdateSubtitle(sub.id, { text: editingSubText }); setEditingSubId(undefined); } }}
+                            className="w-full bg-transparent text-[9px] text-violet-50 outline-none"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <p className="truncate text-[9px] leading-4">{sub.text}</p>
+                        )}
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="flex h-full min-h-[44px] items-center justify-center rounded-[10px] border border-dashed border-white/8 bg-white/[0.02] text-[9px] text-stone-500">
+                    Add subtitles via toolbar
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Export toast */}
+      {exportToast ? (
+        <div className="pointer-events-none fixed inset-x-0 top-6 z-[9999] flex justify-center">
+          <div className={clsx(
+            "pointer-events-auto rounded-xl border px-4 py-2 text-[12px] font-medium shadow-xl",
+            exportToast.includes("failed")
+              ? "border-rose-400/20 bg-rose-950/90 text-rose-200"
+              : "border-emerald-400/20 bg-emerald-950/90 text-emerald-200",
+          )}>
+            {exportToast}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Context menu */}
+      {ctxMenu ? (
+        <div
+          className="fixed z-[9999] min-w-[160px] max-h-[80vh] overflow-y-auto rounded-xl border border-white/10 bg-[#0f1012] py-1 shadow-2xl"
+          style={{ left: Math.min(ctxMenu.x, window.innerWidth - 180), ...(ctxMenu.y > window.innerHeight * 0.5 ? { bottom: window.innerHeight - ctxMenu.y } : { top: ctxMenu.y }) }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {ctxMenu.trackType === "subtitle" ? (
+            <>
+              <button type="button" onClick={() => { const sub = subtitleClips.find((s) => s.id === ctxMenu.clipId); if (sub) { setEditingSubId(sub.id); setEditingSubText(sub.text); } setCtxMenu(undefined); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <Pencil className="h-3 w-3" /> Edit Text
+              </button>
+              <button type="button" onClick={() => { onRemoveSubtitle(ctxMenu.clipId); setCtxMenu(undefined); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-rose-300 hover:bg-white/8">
+                <Trash2 className="h-3 w-3" /> Delete
+              </button>
+            </>
+          ) : ctxMenu.trackType === "overlay" ? (
+            <>
+              <button type="button" onClick={() => handleCtxAction("move-to-visual")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <Video className="h-3 w-3" /> Move to Visual
+              </button>
+              <button type="button" onClick={() => { const ov = overlayClips.find((o) => o.id === ctxMenu.clipId); if (ov) overlayClipboardRef.current = { ...ov }; setCtxMenu(undefined); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <Copy className="h-3 w-3" /> Copy
+              </button>
+              <button type="button" onClick={() => { const cb = overlayClipboardRef.current; if (cb) { onAddOverlay({ ...cb, id: `ov-${Date.now()}`, start: currentTime, end: currentTime + (cb.end - cb.start) }); } setCtxMenu(undefined); }} disabled={!overlayClipboardRef.current} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8 disabled:text-stone-600">
+                <Plus className="h-3 w-3" /> Paste
+              </button>
+              <div className="my-1 h-px bg-white/8" />
+              <button type="button" onClick={() => { onRemoveOverlay(ctxMenu.clipId); setCtxMenu(undefined); }} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-rose-300 hover:bg-white/8">
+                <Trash2 className="h-3 w-3" /> Delete Overlay
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="px-3 py-1 text-[8px] uppercase tracking-[0.2em] text-stone-500">Speed</div>
+              <button type="button" onClick={() => handleCtxAction("speed-200")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <FastForward className="h-3 w-3" /> 2× Fast
+              </button>
+              <button type="button" onClick={() => handleCtxAction("speed-150")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <FastForward className="h-3 w-3" /> 1.5× Fast
+              </button>
+              <button type="button" onClick={() => handleCtxAction("slow-050")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <Gauge className="h-3 w-3" /> 0.5× Slow
+              </button>
+              <button type="button" onClick={() => handleCtxAction("slow-025")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <Gauge className="h-3 w-3" /> 0.25× Slow
+              </button>
+              <button type="button" onClick={() => handleCtxAction("reset-speed")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <RefreshCcw className="h-3 w-3" /> Reset Speed
+              </button>
+              <div className="my-1 h-px bg-white/8" />
+              <button type="button" onClick={() => handleCtxAction("split")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <Scissors className="h-3 w-3" /> Split at Playhead
+              </button>
+              {(() => { const c = clips.find((cl) => cl.id === ctxMenu.clipId); return (
+                <>
+                  {c?.asset.kind === "video" ? (
+                    <button type="button" onClick={() => handleCtxAction("extract-audio")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                      <AudioLines className="h-3 w-3" /> Extract Audio
+                    </button>
+                  ) : null}
+                  {c?.asset.kind === "image" ? (
+                    <button type="button" onClick={() => handleCtxAction("move-to-overlay")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                      <ImagePlus className="h-3 w-3" /> Move to Overlay
+                    </button>
+                  ) : null}
+                </>
+              ); })()}
+              <div className="my-1 h-px bg-white/8" />
+              <button type="button" onClick={() => handleCtxAction("copy")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8">
+                <Copy className="h-3 w-3" /> Copy
+              </button>
+              <button type="button" onClick={() => handleCtxAction("paste")} disabled={!clipboardRef.current} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-stone-200 hover:bg-white/8 disabled:text-stone-600">
+                <Plus className="h-3 w-3" /> Paste
+              </button>
+              <div className="my-1 h-px bg-white/8" />
+              <button type="button" onClick={() => handleCtxAction("delete")} className="flex w-full items-center gap-2 px-3 py-1.5 text-[10px] text-rose-300 hover:bg-white/8">
+                <Trash2 className="h-3 w-3" /> Delete
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -6123,7 +7500,7 @@ function formatDuration(secs: number | null | undefined) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function MusicMiniPlayer({ onExpand }: { onExpand: () => void }) {
+function MusicMiniPlayer({ onExpand, onHide }: { onExpand: () => void; onHide: () => void }) {
   const musicTracks = useAppStore((state) => state.musicTracks);
   const currentIndex = useAppStore((state) => state.musicCurrentIndex);
   const playing = useAppStore((state) => state.musicPlaying);
@@ -6253,6 +7630,11 @@ function MusicMiniPlayer({ onExpand }: { onExpand: () => void }) {
           className="h-1 w-16 cursor-pointer appearance-none rounded-full bg-white/10 accent-emerald-400 [&::-webkit-slider-thumb]:h-2 [&::-webkit-slider-thumb]:w-2 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-emerald-300"
         />
       </div>
+
+      {/* Hide mini player */}
+      <button type="button" onClick={onHide} className="ml-1 rounded-lg p-1 text-stone-500 transition hover:bg-white/8 hover:text-stone-200" aria-label="Hide mini player">
+        <X className="h-3 w-3" />
+      </button>
     </div>
   );
 }
@@ -6274,8 +7656,13 @@ function MusicPage() {
   const refreshMusicLibrary = useAppStore((state) => state.refreshMusicLibrary);
   const setMusicFolder = useAppStore((state) => state.setMusicFolder);
   const musicFolderPath = useAppStore((state) => state.musicFolderPath);
+  const activeMusicCategory = useAppStore((state) => state.activeMusicCategory);
+  const refreshMusicCategories = useAppStore((state) => state.refreshMusicCategories);
+  const musicCategories = useAppStore((state) => state.musicCategories);
+  const linkTracksToCategory = useAppStore((state) => state.linkTracksToCategory);
   const [searchQuery, setSearchQuery] = useState("");
   const [folderDisplay, setFolderDisplay] = useState("");
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; track: typeof musicTracks[number] } | null>(null);
 
   const track = currentIndex >= 0 && currentIndex < musicTracks.length ? musicTracks[currentIndex] : null;
 
@@ -6293,6 +7680,7 @@ function MusicPage() {
       if (!musicTracks.length) {
         void refreshMusicLibrary();
       }
+      void refreshMusicCategories();
     })();
   }, []);
 
@@ -6323,21 +7711,50 @@ function MusicPage() {
   };
 
   const filteredTracks = useMemo(() => {
+    let tracks = musicTracks;
+    // Filter by active category
+    if (activeMusicCategory === "__uncategorized__") {
+      tracks = tracks.filter((t) => !t.category);
+    } else if (activeMusicCategory) {
+      tracks = tracks.filter((t) => t.category === activeMusicCategory);
+    }
+    // Filter by search query
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return musicTracks;
-    return musicTracks.filter(
-      (t) =>
-        (t.title?.toLowerCase().includes(q)) ||
-        (t.artist?.toLowerCase().includes(q)) ||
-        (t.album?.toLowerCase().includes(q)) ||
-        t.fileName.toLowerCase().includes(q),
-    );
-  }, [musicTracks, searchQuery]);
+    if (q) {
+      tracks = tracks.filter(
+        (t) =>
+          (t.title?.toLowerCase().includes(q)) ||
+          (t.artist?.toLowerCase().includes(q)) ||
+          (t.album?.toLowerCase().includes(q)) ||
+          t.fileName.toLowerCase().includes(q),
+      );
+    }
+    return tracks;
+  }, [musicTracks, searchQuery, activeMusicCategory]);
 
   const cycleRepeat = () => {
     const modes: Array<"off" | "all" | "one"> = ["off", "all", "one"];
     const next = modes[(modes.indexOf(repeatMode) + 1) % modes.length];
     setRepeatMode(next);
+  };
+
+  // Close context menu on click anywhere or Escape
+  useEffect(() => {
+    if (!ctxMenu) return undefined;
+    const close = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("click", close); window.removeEventListener("keydown", onKey); };
+  }, [ctxMenu]);
+
+  const handleAddToPlaylist = async (track: typeof musicTracks[number], categoryName: string) => {
+    try {
+      await linkTracksToCategory([track.filePath], categoryName);
+    } catch (err) {
+      console.error("Failed to add to playlist:", err);
+    }
+    setCtxMenu(null);
   };
 
   return (
@@ -6376,7 +7793,7 @@ function MusicPage() {
             </button>
             <button
               type="button"
-              onClick={() => void refreshMusicLibrary()}
+              onClick={() => { void refreshMusicLibrary(); void refreshMusicCategories(); }}
               className="inline-flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-200 transition hover:bg-white/10"
             >
               <RefreshCcw className="h-3 w-3" />
@@ -6494,7 +7911,12 @@ function MusicPage() {
           <div className="flex items-center gap-2 border-b border-white/6 px-4 py-3">
             <ListMusic className="h-4 w-4 text-emerald-300/70" />
             <span className="text-[11px] font-semibold tracking-wide text-stone-300">
-              Library ({musicTracks.length} track{musicTracks.length !== 1 ? "s" : ""})
+              {activeMusicCategory && activeMusicCategory !== "__uncategorized__"
+                ? activeMusicCategory
+                : activeMusicCategory === "__uncategorized__"
+                  ? "Uncategorized"
+                  : "Library"}{" "}
+              ({filteredTracks.length} track{filteredTracks.length !== 1 ? "s" : ""})
             </span>
             <div className="ml-auto flex-1 max-w-xs">
               <input
@@ -6534,6 +7956,10 @@ function MusicPage() {
                       type="button"
                       onClick={() => {
                         setCurrentIndex(globalIdx);
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setCtxMenu({ x: e.clientX, y: e.clientY, track: t });
                       }}
                       className={clsx(
                         "flex w-full items-center gap-3 px-4 py-2.5 text-left transition",
@@ -6577,6 +8003,53 @@ function MusicPage() {
           </div>
         </section>
       </div>
+
+      {/* Right-click context menu */}
+      {ctxMenu
+        ? createPortal(
+            <div
+              className="fixed z-[9999] min-w-[180px] rounded-xl border border-white/10 bg-[#1a1b1e]/95 py-1 shadow-2xl backdrop-blur-xl"
+              style={{ left: ctxMenu.x, top: ctxMenu.y }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="truncate px-3 py-1.5 text-[10px] font-semibold text-stone-300">
+                {ctxMenu.track.title ?? ctxMenu.track.fileName}
+              </p>
+              <div className="my-1 border-t border-white/6" />
+              {musicCategories.length > 0 ? (
+                <>
+                  <p className="px-3 py-1 text-[9px] uppercase tracking-[0.2em] text-stone-500">Add to playlist</p>
+                  {musicCategories.map((cat) => (
+                    <button
+                      key={cat.path}
+                      type="button"
+                      onClick={() => void handleAddToPlaylist(ctxMenu.track, cat.name)}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-stone-200 transition hover:bg-white/8"
+                    >
+                      <Hash className="h-3 w-3 text-purple-300/70" />
+                      {cat.name}
+                    </button>
+                  ))}
+                  <div className="my-1 border-t border-white/6" />
+                </>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  setCtxMenu(null);
+                  // Reveal track in Finder
+                  const dir = ctxMenu.track.filePath.substring(0, ctxMenu.track.filePath.lastIndexOf("/"));
+                  if (dir) void api.revealMusicFolder(dir);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-stone-300 transition hover:bg-white/8"
+              >
+                <Folder className="h-3 w-3 text-stone-400" />
+                Show in Finder
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
     </section>
   );
 }
@@ -6586,45 +8059,44 @@ function TilesPage() {
   const setLayout = useAppStore((state) => state.setTileLayout);
   const sessions = useAppStore((state) => state.tileSessionIds);
   const setSessions = useAppStore((state) => state.setTileSessionIds);
-  const sessionsRef = useRef<string[]>(sessions);
-  sessionsRef.current = sessions;
 
-  // Reconcile sessions when layout changes: keep existing, spawn/kill the diff
+  // Spawn new terminals only when the layout needs more than we currently have.
+  // Never kill terminals on downsize — they stay alive in the background so the
+  // user can resize back up and find their sessions exactly as they left them.
+  // Batch-spawn all needed terminals at once so the grid is at its final layout
+  // before any TileTerminal mounts (prevents double-prompt from grid reflow).
   useEffect(() => {
     let cancelled = false;
 
-    const current = useAppStore.getState().tileSessionIds;
+    const allSessions = useAppStore.getState().tileSessionIds;
 
-    if (current.length > layout) {
-      // Downsizing: kill excess, keep the rest
-      const keep = current.slice(0, layout);
-      const excess = current.slice(layout);
-      for (const sid of excess) {
-        void api.killTerminal(sid);
-      }
-      setSessions(keep);
-    } else if (current.length < layout) {
-      // Upsizing: spawn only the additional sessions needed, saving incrementally
-      const spawnExtra = async () => {
-        for (let i = useAppStore.getState().tileSessionIds.length; i < layout; i++) {
-          if (cancelled) return;
-          const handle = await api.createTerminal();
-          if (cancelled) {
-            void api.killTerminal(handle.sessionId);
-            return;
-          }
-          // Save each session immediately so cancelled spawns don't create zombies
-          const latest = useAppStore.getState().tileSessionIds;
-          setSessions([...latest, handle.sessionId]);
+    if (allSessions.length < layout) {
+      const needed = layout - allSessions.length;
+      const spawnBatch = async () => {
+        const handles = await Promise.all(
+          Array.from({ length: needed }, () => api.createTerminal()),
+        );
+        if (cancelled) {
+          for (const h of handles) void api.killTerminal(h.sessionId);
+          return;
         }
+        const latest = useAppStore.getState().tileSessionIds;
+        setSessions([...latest, ...handles.map((h) => h.sessionId)]);
       };
-      void spawnExtra();
+      void spawnBatch();
     }
 
     return () => {
       cancelled = true;
     };
   }, [layout, setSessions]);
+
+  // Only render terminals up to the current layout size.
+  // Hidden terminals (beyond the layout) keep their PTY sessions alive in
+  // the Rust backend — they simply don't have an xterm.js frontend attached.
+  // When the user upsizes back, TileTerminal re-mounts and reconnects to
+  // the existing PTY session, nudging the shell to redraw its prompt.
+  const visibleSessions = sessions.slice(0, layout);
 
   const gridClass =
     layout === 2
@@ -6638,6 +8110,9 @@ function TilesPage() {
       <div className="flex items-center gap-2 px-4 py-2">
         <LayoutGrid className="h-4 w-4 text-emerald-300/70" />
         <span className="text-[11px] font-semibold tracking-wide text-stone-300">Terminal Tiles</span>
+        <span className="text-[9px] text-stone-600">
+          {sessions.length} session{sessions.length !== 1 ? "s" : ""} · {visibleSessions.length} visible
+        </span>
         <div className="ml-auto flex items-center gap-1">
           {([2, 4, 9] as TileLayout[]).map((n) => (
             <button
@@ -6657,7 +8132,7 @@ function TilesPage() {
         </div>
       </div>
       <div className={clsx("grid flex-1 min-h-0 gap-1 p-1", gridClass)}>
-        {sessions.map((sessionId) => (
+        {visibleSessions.map((sessionId) => (
           <TileTerminal key={sessionId} sessionId={sessionId} />
         ))}
       </div>
@@ -6744,19 +8219,14 @@ function TileTerminal({ sessionId }: { sessionId: string }) {
       unlistenFn = unlisten;
 
       // Drain any early output that was buffered before the listener was ready.
-      // Don't replay it — the early buffer may contain duplicate prompts from
-      // the pre-resize and post-resize PTY size. Instead, send Ctrl+L to clear
-      // the screen and redraw a single clean prompt at the correct viewport size.
+      // Always use Ctrl+L to clear the screen and redraw a single clean prompt
+      // at the correct viewport size — this works for both fresh sessions (early
+      // buffer present) and re-mounts after navigation (early buffer drained).
+      // Using \n instead would risk a double-prompt when a resize also fires.
       try {
-        const earlyOutput = await api.getTerminalBuffer(sessionId);
+        await api.getTerminalBuffer(sessionId);
         if (!disposed && xtermRef.current) {
-          if (earlyOutput) {
-            void api.writeTerminalInput(sessionId, "\x0c");
-          } else {
-            // Session already existed (re-mount after navigation) — the early
-            // buffer was already drained, so nudge the shell to redraw its prompt.
-            void api.writeTerminalInput(sessionId, "\n");
-          }
+          void api.writeTerminalInput(sessionId, "\x0c");
         }
       } catch {
         // Session may already be gone — ignore
@@ -7023,7 +8493,7 @@ function AsciiVisionPanel({ onClose }: { onClose: () => void }) {
             </div>
           </div>
         ) : null}
-        <div ref={hostRef} className="absolute inset-0 overflow-hidden p-1" />
+        <div ref={hostRef} className="absolute top-0.5 bottom-4 left-2 right-2 overflow-hidden" />
       </div>
     </div>
   );
@@ -7157,11 +8627,18 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
   const saveSettings = useAppStore((state) => state.saveSettings);
   const saveApiKey = useAppStore((state) => state.saveApiKey);
   const deleteApiKey = useAppStore((state) => state.deleteApiKey);
+  const ollamaModels = useAppStore((state) => state.models.ollama);
+  const refreshModels = useAppStore((state) => state.refreshModels);
   const [draft, setDraft] = useState<Settings | undefined>(settings);
   const [xAiKey, setXAiKey] = useState("");
+  const [avEnv, setAvEnv] = useState<Record<string, string>>({});
+  const [avEnvSaved, setAvEnvSaved] = useState(false);
+  const [prefsSaved, setPrefsSaved] = useState(false);
 
   useEffect(() => {
     setDraft(settings);
+    void api.readAsciivisionEnv().then(setAvEnv).catch(() => {});
+    void refreshModels();
   }, [settings]);
 
   if (!draft) {
@@ -7172,8 +8649,8 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center overflow-hidden rounded-[34px] bg-black/60 px-6 py-8 backdrop-blur-xl">
-      <div className="w-full max-w-4xl rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,#0b0b0d_0%,#090a0c_100%)] p-6 shadow-[0_28px_100px_rgba(0,0,0,0.6)]">
-        <div className="mb-6 flex items-start justify-between gap-4 border-b border-white/6 pb-5">
+      <div className="flex max-h-[85vh] w-full max-w-4xl flex-col rounded-[30px] border border-white/8 bg-[linear-gradient(180deg,#0b0b0d_0%,#090a0c_100%)] shadow-[0_28px_100px_rgba(0,0,0,0.6)]">
+        <div className="flex flex-shrink-0 items-start justify-between gap-4 border-b border-white/6 px-6 pb-5 pt-6">
           <div>
             <p className="text-[10px] uppercase tracking-[0.35em] text-[#84a09b]">Settings</p>
             <h2 className="mt-2 text-xl font-semibold text-stone-100">Shell preferences</h2>
@@ -7190,7 +8667,9 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.12)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:my-3 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/10 hover:[&::-webkit-scrollbar-thumb]:bg-white/20">
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <section className="rounded-[24px] border border-white/8 bg-white/[0.03] p-4">
             <p className="text-[10px] uppercase tracking-[0.3em] text-[#84a09b]">Shell</p>
             <div className="mt-4 grid gap-4">
@@ -7212,6 +8691,36 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
                 />
                 Keep Super ASCIIVision above other windows
               </label>
+
+              <div className="space-y-2 text-[11px] text-stone-300">
+                <span>Theme</span>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {(["", "ocean", "sunset", "violet", "golden", "crimson"] as const).map((themeId) => {
+                    const label = themeId || "Emerald";
+                    const active = (draft.theme ?? "") === themeId;
+                    const dot = { "": "#6ee7b7", ocean: "#60a5fa", sunset: "#fb923c", violet: "#c084fc", golden: "#fbbf24", crimson: "#f87171" }[themeId];
+                    return (
+                      <button
+                        key={themeId}
+                        type="button"
+                        onClick={() => {
+                          setDraft({ ...draft, theme: themeId });
+                          document.documentElement.setAttribute("data-theme", themeId);
+                        }}
+                        className={clsx(
+                          "flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px] font-medium transition",
+                          active
+                            ? "border-white/20 bg-white/10 text-stone-100"
+                            : "border-white/8 bg-black/25 text-stone-400 hover:bg-white/7 hover:text-stone-200",
+                        )}
+                      >
+                        <span className="h-3 w-3 rounded-full" style={{ backgroundColor: dot }} />
+                        {label.charAt(0).toUpperCase() + label.slice(1)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </section>
 
@@ -7305,6 +8814,31 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
                 </select>
               </label>
             </div>
+
+            {/* Ollama default model */}
+            <div className="mt-4 rounded-2xl border border-white/8 bg-black/25 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] uppercase tracking-[0.18em] text-stone-500">Default Ollama model</span>
+                <span className="rounded-full border border-sky-300/18 bg-sky-300/10 px-2 py-0.5 font-['IBM_Plex_Mono'] text-[8px] uppercase tracking-[0.2em] text-sky-200">
+                  Ollama
+                </span>
+              </div>
+              <select
+                value={draft.ollamaModel ?? ""}
+                onChange={(event) => setDraft({ ...draft, ollamaModel: event.target.value || undefined })}
+                className="mt-3 w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none transition focus:border-sky-300/40"
+              >
+                <option value="">Auto (first available)</option>
+                {ollamaModels.map((m) => (
+                  <option key={m.modelId} value={m.modelId}>
+                    {m.modelId}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-2 text-[9px] text-stone-500">
+                {ollamaModels.length ? `${ollamaModels.length} model${ollamaModels.length !== 1 ? "s" : ""} detected` : "Run 'ollama serve' to detect models"}
+              </p>
+            </div>
           </section>
         </div>
 
@@ -7346,6 +8880,52 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
           <p className="mt-2 text-[10px] text-stone-500">{xAiConfigured ? "Key configured." : "No key stored."}</p>
         </div>
 
+        {/* ASCIIVision API Keys */}
+        <div className="mt-5 rounded-[20px] border border-white/8 bg-white/[0.03] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.3em] text-stone-500">ASCIIVision API keys</p>
+              <p className="mt-1 text-[11px] text-stone-500">Saved to asciivision-core/.env for multi-provider AI chat. Your xAI key is shared automatically.</p>
+            </div>
+            <div className="rounded-full border border-purple-300/18 bg-purple-300/10 px-3 py-1 font-['IBM_Plex_Mono'] text-[9px] uppercase tracking-[0.2em] text-purple-200">
+              Terminal
+            </div>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {(
+              [
+                ["CLAUDE_API_KEY", "Claude (Anthropic)"],
+                ["OPENAI_API_KEY", "GPT (OpenAI)"],
+                ["GEMINI_API_KEY", "Gemini (Google)"],
+              ] as const
+            ).map(([envKey, label]) => (
+              <label key={envKey} className="space-y-1.5 text-[11px] text-stone-300">
+                <span className="text-[9px] text-stone-500">{label}</span>
+                <input
+                  type="password"
+                  value={avEnv[envKey] ?? ""}
+                  onChange={(e) => { setAvEnv((prev) => ({ ...prev, [envKey]: e.target.value })); setAvEnvSaved(false); }}
+                  placeholder={`Paste ${label.split(" ")[0]} key`}
+                  className="w-full rounded-xl border border-white/8 bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-100 outline-none focus:border-purple-300/40"
+                />
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={async () => {
+                await api.writeAsciivisionEnv(avEnv);
+                setAvEnvSaved(true);
+              }}
+              className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-stone-200 transition hover:bg-white/10"
+            >
+              Save ASCIIVision keys
+            </button>
+            {avEnvSaved ? <span className="text-[10px] text-emerald-400">Saved</span> : null}
+          </div>
+        </div>
+
         <div className="mt-6 flex items-center justify-between">
           <button
             type="button"
@@ -7357,14 +8937,23 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
           >
             Clear media library
           </button>
-          <button
-            type="button"
-            onClick={() => void saveSettings(draft)}
-            className="rounded-xl border border-emerald-300/20 bg-emerald-300/12 px-4 py-2 text-[11px] text-emerald-50 transition hover:bg-emerald-300/20"
-          >
-            Save preferences
-          </button>
+          <div className="flex items-center gap-3">
+            {prefsSaved ? <span className="text-[10px] text-emerald-400 animate-pulse">Preferences saved</span> : null}
+            <button
+              type="button"
+              onClick={async () => {
+                await saveSettings(draft);
+                setPrefsSaved(true);
+                setTimeout(() => setPrefsSaved(false), 2500);
+              }}
+              className="rounded-xl border border-emerald-300/20 bg-emerald-300/12 px-4 py-2 text-[11px] text-emerald-50 transition hover:bg-emerald-300/20"
+            >
+              Save preferences
+            </button>
+          </div>
         </div>
+
+        </div>{/* end scroll wrapper */}
       </div>
     </div>
   );

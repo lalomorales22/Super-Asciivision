@@ -15,6 +15,7 @@ import type {
   MediaAsset,
   MediaCategory,
   ModelDescriptor,
+  MusicCategory as MusicCategoryType,
   MusicTrack,
   NewConversation,
   NewMediaCategory,
@@ -119,6 +120,8 @@ export const api = {
     invoke<MediaAsset>("generate_video_command", { input }),
   exportEditorTimeline: (input: ExportEditorTimelineRequest) =>
     invoke<MediaAsset>("export_editor_timeline_command", { input }),
+  extractAudio: (sourcePath: string) =>
+    invoke<MediaAsset>("extract_audio_command", { sourcePath }),
   textToSpeech: (input: TextToSpeechRequest) =>
     invoke<MediaAsset>("text_to_speech_command", { input }),
   createRealtimeSession: (input: RealtimeSessionRequest) =>
@@ -143,6 +146,20 @@ export const api = {
     invoke<string>("get_default_music_folder"),
   revealMusicFolder: (folderPath: string) =>
     invoke<void>("reveal_music_folder", { folderPath }),
+  listMusicCategories: (folderPath?: string) =>
+    invoke<MusicCategoryType[]>("list_music_categories", { folderPath }),
+  createMusicCategory: (name: string, folderPath?: string) =>
+    invoke<MusicCategoryType>("create_music_category", { name, folderPath }),
+  deleteMusicCategory: (categoryPath: string) =>
+    invoke<void>("delete_music_category", { categoryPath }),
+  linkTracksToCategory: (trackPaths: string[], categoryName: string, folderPath?: string) =>
+    invoke<number>("link_tracks_to_category", { trackPaths, categoryName, folderPath }),
+  importMusicFiles: (filePaths: string[], targetFolder?: string, folderPath?: string) =>
+    invoke<number>("import_music_files", { filePaths, targetFolder, folderPath }),
+  readAsciivisionEnv: () =>
+    invoke<Record<string, string>>("read_asciivision_env"),
+  writeAsciivisionEnv: (keys: Record<string, string>) =>
+    invoke<void>("write_asciivision_env", { keys }),
 };
 
 export const events = {

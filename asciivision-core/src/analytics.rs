@@ -74,7 +74,7 @@ impl AnalyticsPanel {
             .title(" ANALYTICS DASHBOARD ")
             .title_style(Style::default().fg(t().accent2).bold())
             .borders(Borders::ALL)
-            .border_type(BorderType::Double)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(t().accent1));
         frame.render_widget(block, area);
 

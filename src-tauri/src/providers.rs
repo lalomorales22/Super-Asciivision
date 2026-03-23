@@ -52,6 +52,10 @@ impl ProviderService {
         self.secrets.has_api_key(provider)
     }
 
+    pub fn get_api_key(&self, provider: ProviderId) -> AppResult<Option<String>> {
+        self.secrets.get_api_key(provider)
+    }
+
     pub fn save_api_key(&self, provider: ProviderId, api_key: &str) -> AppResult<()> {
         self.secrets.set_api_key(provider, api_key)
     }
@@ -527,7 +531,7 @@ impl ProviderService {
             .model_id
             .as_deref()
             .unwrap_or("grok-3-mini-fast");
-        let websocket_url = format!("{}?model={}", XAI_REALTIME_WEBSOCKET_URL, model_id);
+        let websocket_url = XAI_REALTIME_WEBSOCKET_URL.to_string();
 
         // Try ephemeral client_secrets endpoint first (OpenAI-compatible)
         let ephemeral = self

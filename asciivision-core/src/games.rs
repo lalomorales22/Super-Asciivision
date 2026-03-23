@@ -122,6 +122,14 @@ impl GamesPanel {
         &self.status
     }
 
+    pub fn title(&self) -> String {
+        if let Some(session) = &self.session {
+            format!(" GAMES // {} ", session.kind().label())
+        } else {
+            " GAMES // SELECT ".to_string()
+        }
+    }
+
     pub fn next_game(&mut self) {
         self.selected = self.selected.cycle_next();
         self.status = format!("games: selected {}", self.selected.label());
@@ -231,7 +239,7 @@ impl GamesPanel {
             .title(title)
             .title_style(Style::default().fg(t().accent2).bold())
             .borders(Borders::ALL)
-            .border_type(if is_focused { BorderType::Double } else { BorderType::Plain })
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border_color));
         frame.render_widget(block, area);
 

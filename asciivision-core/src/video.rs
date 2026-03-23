@@ -180,8 +180,15 @@ fn spawn_decode(
 
     std::thread::spawn(move || {
         let _result: Result<()> = (|| {
-        let (mut input, video_index, mut decoder, (src_width, src_height), _) =
+        let (mut input, video_index, mut decoder, (src_width, src_height), fps) =
             open_decoder(path.as_path())?;
+
+        // Calculate frame duration from FPS (default 24fps if unknown)
+        let frame_duration = fps
+            .filter(|&(n, d)| n > 0 && d > 0)
+            .map(|(n, d)| std::time::Duration::from_secs_f64(d as f64 / n as f64))
+            .unwrap_or(std::time::Duration::from_millis(42));
+
         let mut scaler = build_scaler(
             decoder.format(),
             src_width,
@@ -191,6 +198,7 @@ fn spawn_decode(
         )?;
         let mut rgb = Video::new(Pixel::RGB24, target_width as u32, target_height as u32);
         let mut decoded = Video::empty();
+        let mut last_frame_time = std::time::Instant::now();
 
         for (stream, packet) in input.packets() {
             if stream.index() != video_index {
@@ -200,6 +208,14 @@ fn spawn_decode(
             decoder.send_packet(&packet)?;
             while decoder.receive_frame(&mut decoded).is_ok() {
                 scaler.run(&decoded, &mut rgb)?;
+
+                // Pace frame delivery to match source FPS
+                let elapsed = last_frame_time.elapsed();
+                if elapsed < frame_duration {
+                    std::thread::sleep(frame_duration - elapsed);
+                }
+                last_frame_time = std::time::Instant::now();
+
                 if tx.send(to_ascii_frame(&rgb)).is_err() {
                     return Ok(());
                 }
@@ -209,6 +225,11 @@ fn spawn_decode(
         decoder.send_eof()?;
         while decoder.receive_frame(&mut decoded).is_ok() {
             scaler.run(&decoded, &mut rgb)?;
+            let elapsed = last_frame_time.elapsed();
+            if elapsed < frame_duration {
+                std::thread::sleep(frame_duration - elapsed);
+            }
+            last_frame_time = std::time::Instant::now();
             let _ = tx.send(to_ascii_frame(&rgb));
         }
 

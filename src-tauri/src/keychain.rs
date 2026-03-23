@@ -10,10 +10,12 @@ pub trait SecretStore: Send + Sync {
     fn has_api_key(&self, provider: ProviderId) -> AppResult<bool>;
 }
 
+#[allow(dead_code)]
 pub struct SystemKeychain {
     service: String,
 }
 
+#[allow(dead_code)]
 impl SystemKeychain {
     pub fn new(service: impl Into<String>) -> Self {
         Self {
@@ -114,6 +116,7 @@ impl SecretStore for FileSecretStore {
     }
 }
 
+#[allow(dead_code)]
 pub struct MigratingSecretStore<S = SystemKeychain>
 where
     S: SecretStore,
@@ -122,6 +125,7 @@ where
     file_store: FileSecretStore,
 }
 
+#[allow(dead_code)]
 impl MigratingSecretStore<SystemKeychain> {
     pub fn new(root: impl Into<PathBuf>, keychain_service: impl Into<String>) -> Self {
         Self {
@@ -143,6 +147,7 @@ where
         }
     }
 
+    #[allow(dead_code)]
     fn migrate_from_file_store(&self, provider: ProviderId) -> AppResult<Option<String>> {
         let Some(value) = self.file_store.get_api_key(provider)? else {
             return Ok(None);

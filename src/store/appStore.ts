@@ -10,6 +10,7 @@ import type {
   MediaAsset,
   MediaCategory,
   ModelDescriptor,
+  MusicCategory as MusicCategoryType,
   MusicTrack,
   ExportEditorTimelineRequest,
   HandsStatus,
@@ -84,6 +85,8 @@ interface AppState {
   musicRepeatMode: "off" | "all" | "one";
   musicVolume: number;
   musicFolderPath?: string;
+  musicCategories: MusicCategoryType[];
+  activeMusicCategory?: string;
   tileSessionIds: string[];
   tileLayout: 2 | 4 | 9;
   setTileSessionIds: (ids: string[]) => void;
@@ -162,6 +165,12 @@ interface AppState {
   musicNext: () => void;
   musicPrevious: () => void;
   setMusicFolder: (path: string) => Promise<void>;
+  refreshMusicCategories: (folderPath?: string) => Promise<void>;
+  setActiveMusicCategory: (name?: string) => void;
+  createMusicCategory: (name: string) => Promise<void>;
+  deleteMusicCategory: (categoryPath: string) => Promise<void>;
+  importMusicFiles: (filePaths: string[], targetFolder?: string) => Promise<number>;
+  linkTracksToCategory: (trackPaths: string[], categoryName: string) => Promise<number>;
 }
 
 const emptyModels: ModelMap = {
@@ -186,8 +195,11 @@ const fallbackSettings: Settings = {
   handsRelayDesktopToken: "",
 };
 
-function pickModel(models: ModelMap, provider: ProviderId = "xai") {
+function pickModel(models: ModelMap, provider: ProviderId = "xai", ollamaDefault?: string) {
   if (provider === "ollama") {
+    if (ollamaDefault && models.ollama.some((m) => m.modelId === ollamaDefault)) {
+      return ollamaDefault;
+    }
     return models.ollama[0]?.modelId ?? "qwen3.5:2b";
   }
   return models.xai[0]?.modelId ?? fallbackSettings.xaiModel ?? "grok-code-fast-1";
@@ -254,6 +266,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   musicShuffleEnabled: false,
   musicRepeatMode: "off",
   musicVolume: 0.8,
+  musicCategories: [],
   tileSessionIds: [],
   tileLayout: 4,
   setTileSessionIds: (ids) => set({ tileSessionIds: ids }),
@@ -485,6 +498,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         booting: false,
       });
 
+      document.documentElement.setAttribute("data-theme", settings.theme ?? "");
+
       await Promise.allSettled([get().refreshModels(), get().startTerminal()]);
 
       const initialConversationId = conversations[0]?.id;
@@ -524,7 +539,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const ollamaModels = ollamaResult.status === "fulfilled" ? ollamaResult.value.filter((m) => m.providerId === "ollama") : [];
     set((state) => ({
       models: { xai: xaiModels, ollama: ollamaModels },
-      selectedModel: state.selectedModel ?? pickModel({ xai: xaiModels, ollama: ollamaModels }, state.selectedProvider),
+      selectedModel: state.selectedModel ?? pickModel({ xai: xaiModels, ollama: ollamaModels }, state.selectedProvider, state.settings?.ollamaModel ?? undefined),
     }));
   },
 
@@ -594,7 +609,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSelectedProvider: (provider) =>
     set((state) => ({
       selectedProvider: provider,
-      selectedModel: pickModel(state.models, provider),
+      selectedModel: pickModel(state.models, provider, state.settings?.ollamaModel ?? undefined),
     })),
 
   setComposer: (value) => set({ composer: value }),
@@ -763,13 +778,16 @@ export const useAppStore = create<AppState>((set, get) => ({
         current.handsRelayDesktopToken ??
         fallbackSettings.handsRelayDesktopToken ??
         "",
+      ollamaModel: next.ollamaModel ?? current.ollamaModel ?? "",
+      theme: next.theme ?? current.theme ?? "",
     });
+
+    document.documentElement.setAttribute("data-theme", settings.theme ?? "");
 
     set({
       settings,
       selectedProvider: "xai",
       selectedModel: settings.xaiModel ?? pickModel(get().models),
-      settingsOpen: false,
     });
   },
 
@@ -1207,5 +1225,41 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMusicFolder: async (path) => {
     set({ musicFolderPath: path, musicCurrentIndex: -1, musicPlaying: false });
     await get().refreshMusicLibrary(path);
+    await get().refreshMusicCategories(path);
+  },
+  refreshMusicCategories: async (folderPath?: string) => {
+    try {
+      const folder = folderPath ?? get().musicFolderPath;
+      const categories = await api.listMusicCategories(folder);
+      set({ musicCategories: categories });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : "Failed to load music categories" });
+    }
+  },
+  setActiveMusicCategory: (name) => set({ activeMusicCategory: name }),
+  createMusicCategory: async (name) => {
+    const folder = get().musicFolderPath;
+    await api.createMusicCategory(name, folder);
+    await get().refreshMusicCategories(folder);
+  },
+  deleteMusicCategory: async (categoryPath) => {
+    await api.deleteMusicCategory(categoryPath);
+    const folder = get().musicFolderPath;
+    await get().refreshMusicCategories(folder);
+    await get().refreshMusicLibrary(folder);
+  },
+  importMusicFiles: async (filePaths, targetFolder) => {
+    const folder = get().musicFolderPath;
+    const count = await api.importMusicFiles(filePaths, targetFolder, folder);
+    await get().refreshMusicLibrary(folder);
+    await get().refreshMusicCategories(folder);
+    return count;
+  },
+  linkTracksToCategory: async (trackPaths, categoryName) => {
+    const folder = get().musicFolderPath;
+    const count = await api.linkTracksToCategory(trackPaths, categoryName, folder);
+    await get().refreshMusicLibrary(folder);
+    await get().refreshMusicCategories(folder);
+    return count;
   },
 }));

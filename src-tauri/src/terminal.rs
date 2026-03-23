@@ -226,6 +226,38 @@ pub async fn resize_terminal(
         .map_err(|error| AppError::message(error.to_string()))
 }
 
+/// Find the last byte position that ends a complete UTF-8 sequence.
+/// If the tail bytes form an incomplete multi-byte character, they are
+/// excluded so the caller can carry them over to the next read.
+fn utf8_safe_boundary(data: &[u8]) -> usize {
+    let len = data.len();
+    if len == 0 {
+        return 0;
+    }
+    // Walk backwards (up to 3 bytes) looking for a partial UTF-8 start byte.
+    for i in 1..=3.min(len) {
+        let b = data[len - i];
+        if b < 0x80 {
+            // ASCII byte — everything including this byte is safe.
+            return len;
+        }
+        if b >= 0xC0 {
+            // Start byte of a multi-byte sequence.
+            let seq_len = if b < 0xE0 { 2 } else if b < 0xF0 { 3 } else { 4 };
+            if i < seq_len {
+                // We don't have enough continuation bytes yet — exclude this sequence.
+                return len - i;
+            }
+            // The sequence is complete — include everything.
+            return len;
+        }
+        // 0x80..0xBF = continuation byte — keep scanning backwards.
+    }
+    // Scanned 3 continuation bytes without a start byte → malformed data.
+    // Emit everything; from_utf8_lossy will replace the bad bytes with U+FFFD.
+    len
+}
+
 fn spawn_reader(
     app: AppHandle,
     session_id: String,
@@ -233,11 +265,17 @@ fn spawn_reader(
     early_buf: Option<Arc<Mutex<Option<Vec<u8>>>>>,
 ) {
     thread::spawn(move || {
-        let mut buffer = [0u8; 4096];
+        // Extra 4 bytes at the front hold any incomplete UTF-8 tail from the
+        // previous read so we can prepend it cheaply.
+        let mut buf = [0u8; 4096 + 4];
+        let mut tail_len: usize = 0;
         loop {
-            match reader.read(&mut buffer) {
+            match reader.read(&mut buf[tail_len..tail_len + 4096]) {
                 Ok(0) => break,
-                Ok(read) => {
+                Ok(n) => {
+                    let total = tail_len + n;
+                    let safe = utf8_safe_boundary(&buf[..total]);
+
                     // While the early buffer is active (Some), capture output there
                     // and skip emitting events — the frontend will replay the buffer
                     // once its listener registers via drain_early_buffer.
@@ -245,19 +283,19 @@ fn spawn_reader(
                     let mut buffered = false;
                     if let Some(ref eb) = early_buf {
                         if let Ok(mut guard) = eb.lock() {
-                            if let Some(ref mut buf) = *guard {
-                                if buf.len() < EARLY_BUFFER_CAP {
-                                    let remaining = EARLY_BUFFER_CAP - buf.len();
-                                    let take = read.min(remaining);
-                                    buf.extend_from_slice(&buffer[..take]);
+                            if let Some(ref mut early) = *guard {
+                                if early.len() < EARLY_BUFFER_CAP {
+                                    let remaining = EARLY_BUFFER_CAP - early.len();
+                                    let take = safe.min(remaining);
+                                    early.extend_from_slice(&buf[..take]);
                                 }
                                 buffered = true;
                             }
                         }
                     }
 
-                    if !buffered {
-                        let chunk = String::from_utf8_lossy(&buffer[..read]).to_string();
+                    if !buffered && safe > 0 {
+                        let chunk = String::from_utf8_lossy(&buf[..safe]).to_string();
                         let _ = app.emit(
                             "terminal://event",
                             TerminalEvent {
@@ -269,6 +307,13 @@ fn spawn_reader(
                             },
                         );
                     }
+
+                    // Carry over any trailing incomplete UTF-8 bytes for the next read.
+                    let leftover = total - safe;
+                    if leftover > 0 {
+                        buf.copy_within(safe..total, 0);
+                    }
+                    tail_len = leftover;
                 }
                 Err(error) => {
                     let _ = app.emit(

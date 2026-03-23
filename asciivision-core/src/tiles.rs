@@ -40,6 +40,15 @@ impl TilesPanel {
         &self.status
     }
 
+    pub fn title(&self) -> String {
+        if self.sessions.is_empty() {
+            " TILES // OFFLINE ".to_string()
+        } else {
+            let n = self.sessions.len();
+            format!(" TILES // {} PTY{} ", n, if n == 1 { "" } else { "S" })
+        }
+    }
+
     pub fn activate_default(&mut self) -> Result<()> {
         if self.sessions.is_empty() {
             self.activate_count(DEFAULT_TILE_COUNT)?;
@@ -82,13 +91,13 @@ impl TilesPanel {
             return false;
         }
 
-        // Ctrl+j/k cycles between inner terminals; Ctrl+h/l is left for outer app focus
+        // Ctrl+s/w cycles between inner terminals; Ctrl+a/d is left for outer app focus
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('j') | KeyCode::Down => {
+                KeyCode::Char('s') | KeyCode::Down => {
                     return self.cycle_inner_focus(1);
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
+                KeyCode::Char('w') | KeyCode::Up => {
                     return self.cycle_inner_focus(-1);
                 }
                 _ => {}
@@ -121,7 +130,7 @@ impl TilesPanel {
             .title(title)
             .title_style(Style::default().fg(t().accent2).bold())
             .borders(Borders::ALL)
-            .border_type(if is_focused { BorderType::Double } else { BorderType::Plain })
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(border_color));
         frame.render_widget(block, area);
 
@@ -158,7 +167,7 @@ impl TilesPanel {
             .split(inner);
 
         let info = Paragraph::new(
-            "type directly into the shell | Ctrl+j/k cycle inner terminals | Ctrl+h/l move app focus",
+            "type directly into the shell | Ctrl+w/s cycle inner terminals | Ctrl+a/d move app focus",
         )
         .style(Style::default().fg(t().muted).bg(t().panel_bg))
         .wrap(Wrap { trim: false });
@@ -179,7 +188,7 @@ impl TilesPanel {
                 .title(title)
                 .title_style(Style::default().fg(if is_active { t().accent2 } else { t().accent4 }).bold())
                 .borders(Borders::ALL)
-                .border_type(if is_active { BorderType::Double } else { BorderType::Plain })
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(border));
             frame.render_widget(block, rect);
 
