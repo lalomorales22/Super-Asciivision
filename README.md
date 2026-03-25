@@ -186,27 +186,32 @@ Open **Settings** in the app and add your API keys for Claude, OpenAI, and Gemin
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────┐
-│  Super ASCIIVision (Tauri 2)                     │
-│                                                  │
-│  Frontend (React/TS)         Backend (Rust)       │
-│  ┌──────────────────┐       ┌──────────────────┐ │
-│  │ App.tsx (~8.9K)   │◄─IPC─►│ lib.rs (commands)│ │
-│  │ appStore.ts       │       │ terminal.rs (PTY)│ │
-│  │ tauri.ts (bridge) │       │ hands.rs (mobile)│ │
-│  │ types.ts          │       │ agent.rs (tools) │ │
-│  └──────────────────┘       │ providers.rs     │ │
-│         │                    │ db.rs (SQLite)   │ │
-│         │ xterm.js           │ keychain.rs      │ │
-│         ▼                    └────────┬─────────┘ │
-│  ┌──────────────────┐                │ sidecar    │
-│  │ ASCIIVision Panel │◄──────PTY─────┘            │
-│  │ (inline terminal) │                            │
-│  └──────────────────┘                             │
-│                                                  │
-│  ASCIIVision Core (Rust/ratatui, 18 files, ~11K) │
-└──────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│  Super ASCIIVision (Tauri 2)                          │
+│                                                       │
+│  Frontend (React/TS)              Backend (Rust)      │
+│  ┌─────────────────────────┐    ┌──────────────────┐  │
+│  │ App.tsx (boot wrapper)  │◄IPC►│ lib.rs (commands)│  │
+│  │ pages/ (8 lazy-loaded)  │    │ terminal.rs (PTY)│  │
+│  │ components/ (shared UI) │    │ hands.rs (mobile)│  │
+│  │ store/ (8 Zustand)      │    │ agent.rs (tools) │  │
+│  │ utils/ (8 pure fn libs) │    │ providers.rs     │  │
+│  │ hooks/ (useDragResize)  │    │ db.rs (SQLite)   │  │
+│  │ lib/tauri.ts (bridge)   │    │ keychain.rs      │  │
+│  └─────────────────────────┘    └────────┬─────────┘  │
+│         │                                │ sidecar     │
+│         │ xterm.js                       │             │
+│         ▼                                │             │
+│  ┌──────────────────┐                    │             │
+│  │ ASCIIVision Panel │◄──────PTY─────────┘             │
+│  │ (inline terminal) │                                 │
+│  └──────────────────┘                                  │
+│                                                       │
+│  ASCIIVision Core (Rust/ratatui, 18 files, ~11K)      │
+└───────────────────────────────────────────────────────┘
 ```
+
+**Frontend architecture:** The UI is split into 8 lazy-loaded page components, 8 domain-specific Zustand stores (chat, media, workspace, music, terminal, settings, hands, tiles), shared components, utility libraries, and custom hooks. Error boundaries wrap page content. List items use `React.memo` and the music track list is virtualized with `react-window`.
 
 **ASCIIVision integration:** The ASCIIVISION button spawns the asciivision binary in a PTY. An inline xterm.js panel renders the output with full truecolor support. All keyboard input passes through. Ctrl+Esc kills the PTY and returns to the GUI shell.
 
@@ -269,10 +274,10 @@ No data is sent anywhere except to the AI provider APIs you configure. Ollama ru
 ## Validation
 
 ```bash
-npx tsc --noEmit                                   # TypeScript
+npx tsc --noEmit                                   # TypeScript (strict mode)
+npm test                                            # Frontend tests (122 Vitest)
 cargo check --manifest-path src-tauri/Cargo.toml    # Rust (Tauri)
 cargo check --manifest-path asciivision-core/Cargo.toml  # Rust (ASCIIVision)
-npm test                                            # Frontend tests
 cargo test --manifest-path src-tauri/Cargo.toml     # Backend tests
 ```
 
@@ -282,12 +287,38 @@ cargo test --manifest-path src-tauri/Cargo.toml     # Backend tests
 
 ```
 ├── src/                        # React/TypeScript frontend
-│   ├── App.tsx                 # All pages and components (~8.9K lines)
-│   ├── store/appStore.ts       # Zustand state management (~1.3K lines)
-│   ├── lib/tauri.ts            # IPC bridge to Rust backend
-│   └── types.ts                # Shared types
+│   ├── App.tsx                 # Boot wrapper + hljs registration (~93 lines)
+│   ├── main.tsx                # Entry point
+│   ├── types.ts                # Shared types (30+ interfaces)
+│   ├── constants.ts            # Model lists, config defaults
+│   ├── pages/                  # 8 lazy-loaded page components
+│   │   ├── ChatPage.tsx        #   AI chat with streaming + agent mode
+│   │   ├── ImaginePage.tsx     #   Image/video generation gallery
+│   │   ├── VoiceAudioPage.tsx  #   TTS + realtime voice
+│   │   ├── EditorPage.tsx      #   Timeline-based media editor
+│   │   ├── IdePage.tsx         #   File explorer + code editor + AI copilot
+│   │   ├── TilesPage.tsx       #   Terminal tile grid
+│   │   ├── MusicPage.tsx       #   Music player (virtualized track list)
+│   │   └── HandsPage.tsx       #   Mobile bridge setup
+│   ├── components/             # Shared UI (memo'd list items, layout shell)
+│   │   ├── layout/             #   GrokShell, TopBar, HistoryRail, panels, sidebars
+│   │   ├── MessageBubble.tsx   #   Chat message (React.memo)
+│   │   ├── CodeBlock.tsx       #   Syntax-highlighted code (React.memo)
+│   │   └── ...                 #   NavTab, ToolCallBlock, ErrorBoundary, etc.
+│   ├── store/                  # 8 domain-specific Zustand stores
+│   │   ├── appStore.ts         #   Settings, providers, models, init orchestration
+│   │   ├── chatStore.ts        #   Conversations, messaging, agent mode
+│   │   ├── mediaStore.ts       #   Media assets, generation, realtime
+│   │   ├── workspaceStore.ts   #   Workspace CRUD, selection, scanning
+│   │   ├── musicStore.ts       #   Music playback, library, playlists
+│   │   ├── terminalStore.ts    #   Terminal PTY, browser preview
+│   │   ├── handsStore.ts       #   Hands service status
+│   │   └── tileStore.ts        #   Terminal tile layout
+│   ├── utils/                  # 8 pure function libraries (with unit tests)
+│   ├── hooks/                  # Custom hooks (useDragResize, etc.)
+│   └── lib/tauri.ts            # IPC bridge to Rust backend
 ├── src-tauri/                  # Rust backend (14 source files, ~10.2K lines)
-│   ├── src/lib.rs              # Tauri commands — chat, media, terminal, music, categories
+│   ├── src/lib.rs              # Tauri commands — chat, media, terminal, music
 │   ├── src/agent.rs            # Agentic tool-use loop
 │   ├── src/terminal.rs         # PTY session management
 │   ├── src/hands.rs            # Mobile bridge service
