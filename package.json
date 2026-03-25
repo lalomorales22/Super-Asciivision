@@ -1,7 +1,7 @@
 {
   "name": "super-asciivision",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.4",
   "license": "MIT",
   "type": "module",
   "scripts": {
