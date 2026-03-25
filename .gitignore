@@ -37,6 +37,9 @@ src-tauri/gen/schemas
 # Build output — ASCIIVision Rust
 asciivision-core/target
 
+# Game dependencies (installed on demand)
+asciivision-core/games/*/node_modules
+
 # Sidecar binaries (built by build-asciivision.sh)
 src-tauri/binaries/asciivision-*
 

@@ -80,6 +80,26 @@ import { Terminal as XTerm } from "xterm";
 import { api, events } from "./lib/tauri";
 import { useAppStore } from "./store/appStore";
 import type { MediaAsset, Message, Settings, StreamEvent, WorkspaceItem, WorkspaceMediaFile } from "./types";
+import {
+  CHAT_MODELS,
+  IMAGE_MODELS,
+  IMAGE_ASPECT_OPTIONS,
+  IMAGE_RESOLUTION_OPTIONS,
+  OLLAMA_IMAGE_MODELS,
+  REALTIME_AUDIO_RATE,
+  VIDEO_MODELS,
+  XAI_VOICE_OPTIONS,
+} from "./constants";
+import { clamp, formatDuration, formatEditableDuration, formatFileSize, formatTimestamp, formatTimelineSeconds, parseSecondsInput } from "./utils/formatting";
+import { extensionForLanguage, leafName, relativeWorkspacePath, renamedPath, replacePathPrefix } from "./utils/paths";
+import { buildAssetPreviewDocument, buildPreviewDocument } from "./utils/html";
+import { decodeBase64Bytes, encodePcm16Base64, normalizeVoiceId, pcm16BytesToFloat32, requestMicrophoneStream } from "./utils/audio";
+import { buildClipTrimPatch, buildTimelineTrack, createEditorClip, findClipAtTime, getEditorClipDuration, getEditorClipSpeed } from "./utils/editor";
+import type { EditorClip, TimelineTrackItem } from "./utils/editor";
+import { shouldStartWindowDrag, isEditableTarget } from "./utils/dom";
+import { estimateSelectedTokens } from "./utils/tokens";
+import { buildIdeTree } from "./utils/tree";
+import type { IdeTreeNode } from "./utils/tree";
 
 // Register highlight.js languages
 hljs.registerLanguage("bash", hljsBash);
@@ -122,16 +142,6 @@ interface ShellChromeActions {
   openEditorAsset: (asset: MediaAsset) => void;
 }
 
-interface EditorClip {
-  id: string;
-  asset: MediaAsset;
-  trimStart: string;
-  trimEnd: string;
-  stillDuration: string;
-  speed: string;
-  mediaDuration?: number; // actual file duration in seconds, populated from media element
-}
-
 interface SubtitleClip {
   id: string;
   text: string;
@@ -154,27 +164,11 @@ interface OverlayClip {
   height: number; // percentage 0-100
 }
 
-interface TimelineTrackItem {
-  clip: EditorClip;
-  start: number;
-  duration: number;
-  end: number;
-}
-
 interface EditorContextMenu {
   clipId: string;
   trackType: "visual" | "audio" | "subtitle" | "overlay";
   x: number;
   y: number;
-}
-
-interface IdeTreeNode {
-  id: string;
-  name: string;
-  path: string;
-  kind: "folder" | "file";
-  file?: WorkspaceItem;
-  children?: IdeTreeNode[];
 }
 
 interface IdeContextMenuState {
@@ -200,311 +194,6 @@ interface ConversationRenameState {
 
 const ShellChromeContext = createContext<ShellChromeActions | null>(null);
 
-const CHAT_MODELS = [
-  "grok-4-1-fast-reasoning",
-  "grok-4-1-fast-non-reasoning",
-  "grok-code-fast-1",
-  "grok-4-fast-reasoning",
-  "grok-4-fast-non-reasoning",
-  "grok-4-0709",
-  "grok-3-mini",
-  "grok-3",
-];
-
-const IMAGE_MODELS = ["grok-imagine-image-pro", "grok-imagine-image"];
-const OLLAMA_IMAGE_MODELS = ["x/flux2-klein:4b", "x/flux2-klein:9b"];
-const VIDEO_MODELS = ["grok-imagine-video"];
-const IMAGE_ASPECT_OPTIONS = ["1:1", "16:9", "9:16", "4:3", "3:4"];
-const IMAGE_RESOLUTION_OPTIONS = ["1k", "2k"];
-const XAI_VOICE_OPTIONS = [
-  { id: "eve", label: "Eve" },
-  { id: "ara", label: "Ara" },
-  { id: "rex", label: "Rex" },
-  { id: "sal", label: "Sal" },
-  { id: "leo", label: "Leo" },
-];
-const REALTIME_AUDIO_RATE = 24_000;
-
-function clamp(value: number, minimum: number, maximum: number) {
-  return Math.min(Math.max(value, minimum), maximum);
-}
-
-function estimateSelectedTokens(items: WorkspaceItem[], selection: Record<string, boolean>) {
-  return Math.round(
-    items
-      .filter((item) => selection[item.id] && item.chunkCount > 0)
-      .reduce((sum, item) => sum + item.byteSize, 0) / 4,
-  );
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function buildPreviewDocument(code: string, language?: string) {
-  const normalized = (language ?? "").toLowerCase();
-  if (["html", "htm"].includes(normalized)) {
-    return code;
-  }
-  if (normalized === "css") {
-    return `<!doctype html><html><head><style>${code}</style></head><body><main class="preview-root">CSS preview</main></body></html>`;
-  }
-  if (["javascript", "js", "mjs"].includes(normalized)) {
-    return `<!doctype html><html><body><div id="app"></div><script type="module">${code}</script></body></html>`;
-  }
-  return `<!doctype html><html><body style="margin:0;background:#070809;color:#f5f5f4;font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;"><pre style="margin:0;padding:18px;white-space:pre-wrap;">${escapeHtml(code)}</pre></body></html>`;
-}
-
-function buildAssetPreviewDocument(asset: MediaAsset, src: string) {
-  const shell = "margin:0;min-height:100vh;background:#050607;color:#f5f5f4;color-scheme:dark;";
-  const scrollbar =
-    "html{scrollbar-color:rgba(132,160,155,0.48) #050607;}::-webkit-scrollbar{width:12px;height:12px;background:#050607;}::-webkit-scrollbar-thumb{border-radius:999px;background:linear-gradient(180deg,rgba(132,160,155,0.55),rgba(125,211,252,0.4));border:2px solid #050607;}::-webkit-scrollbar-corner{background:#050607;}";
-  const fitStyle =
-    "display:block;width:auto;height:auto;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);object-fit:contain;margin:auto;";
-  if (asset.kind === "image") {
-    return `<!doctype html><html><head><style>${scrollbar}</style></head><body style="${shell}display:grid;place-items:center;padding:12px;overflow:auto;"><img src="${src}" style="${fitStyle}" /></body></html>`;
-  }
-  if (asset.kind === "video") {
-    return `<!doctype html><html><head><style>${scrollbar}</style></head><body style="${shell}display:grid;place-items:center;padding:12px;overflow:auto;"><video src="${src}" controls autoplay style="${fitStyle}" playsinline></video></body></html>`;
-  }
-  return `<!doctype html><html><head><style>${scrollbar}</style></head><body style="${shell}display:grid;place-items:center;font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;"><audio src="${src}" controls autoplay></audio></body></html>`;
-}
-
-function extensionForLanguage(language?: string) {
-  switch ((language ?? "").toLowerCase()) {
-    case "html":
-    case "htm":
-      return "html";
-    case "css":
-      return "css";
-    case "javascript":
-    case "js":
-    case "mjs":
-      return "js";
-    case "typescript":
-    case "ts":
-      return "ts";
-    case "tsx":
-      return "tsx";
-    case "json":
-      return "json";
-    case "rust":
-    case "rs":
-      return "rs";
-    case "python":
-    case "py":
-      return "py";
-    case "markdown":
-    case "md":
-      return "md";
-    default:
-      return "txt";
-  }
-}
-
-function leafName(path: string) {
-  const parts = path.split("/");
-  return parts[parts.length - 1] ?? path;
-}
-
-function formatTimestamp(value?: string | null) {
-  if (!value) {
-    return "Never";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString();
-}
-
-function parentPath(path: string) {
-  const normalized = path.replace(/\/+$/, "");
-  const lastSlash = normalized.lastIndexOf("/");
-  return lastSlash > 0 ? normalized.slice(0, lastSlash) : "";
-}
-
-function renamedPath(path: string, nextName: string) {
-  const parent = parentPath(path);
-  return parent ? `${parent}/${nextName}` : nextName;
-}
-
-function replacePathPrefix(path: string, from: string, to: string) {
-  if (path === from) {
-    return to;
-  }
-  return path.startsWith(`${from}/`) ? `${to}${path.slice(from.length)}` : path;
-}
-
-function formatFileSize(bytes: number) {
-  if (bytes >= 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-  }
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.round(bytes / 1024)} KB`;
-  }
-  return `${bytes} B`;
-}
-
-function formatEditableDuration(value: number) {
-  if (!Number.isFinite(value)) {
-    return "0";
-  }
-  const normalized = Math.max(0, value);
-  return normalized.toFixed(2).replace(/\.?0+$/, "");
-}
-
-function shouldStartWindowDrag(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) {
-    return true;
-  }
-
-  return !target.closest(
-    '[data-no-drag="true"],button,input,select,textarea,a,[role="button"],[contenteditable="true"]',
-  );
-}
-
-function relativeWorkspacePath(path: string, roots: string[]) {
-  const normalizedPath = path.replace(/\\/g, "/");
-  for (const root of roots) {
-    const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
-    if (normalizedPath === normalizedRoot) {
-      return leafName(normalizedPath);
-    }
-    if (normalizedPath.startsWith(`${normalizedRoot}/`)) {
-      return normalizedPath.slice(normalizedRoot.length + 1);
-    }
-  }
-  return leafName(normalizedPath);
-}
-
-function isSameOrDescendantPath(path: string, root: string) {
-  const normalizedPath = path.replace(/\\/g, "/");
-  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
-}
-
-function buildIdeTree(items: WorkspaceItem[], roots: string[]) {
-  const rootNodes = new Map<string, IdeTreeNode>();
-
-  for (const root of roots) {
-    rootNodes.set(root, {
-      id: `root:${root}`,
-      name: leafName(root),
-      path: root,
-      kind: "folder",
-      children: [],
-    });
-  }
-
-  items.forEach((item) => {
-    const rootPath = roots.find((root) => isSameOrDescendantPath(item.path, root));
-    const rootKey = rootPath ?? roots[0] ?? item.workspaceId;
-    const rootNode =
-      rootNodes.get(rootKey) ??
-      {
-        id: `root:${rootKey}`,
-        name: leafName(rootKey),
-        path: rootKey,
-        kind: "folder" as const,
-        children: [],
-      };
-    rootNodes.set(rootKey, rootNode);
-
-    const parts = relativeWorkspacePath(item.path, roots).split("/").filter(Boolean);
-    let currentNode = rootNode;
-
-    parts.forEach((part, index) => {
-      const isLeaf = index === parts.length - 1;
-      currentNode.children ??= [];
-      let nextNode = currentNode.children.find((child) => child.name === part);
-      if (!nextNode) {
-        const nodePath = isLeaf ? item.path : `${currentNode.path}/${part}`;
-        nextNode = {
-          id: isLeaf ? `file:${item.id}` : `folder:${nodePath}`,
-          name: part,
-          path: nodePath,
-          kind: isLeaf ? "file" : "folder",
-          file: isLeaf ? item : undefined,
-          children: isLeaf ? undefined : [],
-        };
-        currentNode.children.push(nextNode);
-        currentNode.children.sort((left, right) => {
-          if (left.kind !== right.kind) {
-            return left.kind === "folder" ? -1 : 1;
-          }
-          return left.name.localeCompare(right.name);
-        });
-      }
-      currentNode = nextNode;
-    });
-  });
-
-  return Array.from(rootNodes.values());
-}
-
-
-function encodePcm16Base64(input: Float32Array) {
-  const buffer = new ArrayBuffer(input.length * 2);
-  const view = new DataView(buffer);
-  for (let index = 0; index < input.length; index += 1) {
-    const sample = Math.max(-1, Math.min(1, input[index] ?? 0));
-    view.setInt16(index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-  }
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  }
-  return btoa(binary);
-}
-
-function decodeBase64Bytes(value: string) {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
-}
-
-function pcm16BytesToFloat32(bytes: Uint8Array) {
-  const sampleCount = Math.floor(bytes.byteLength / 2);
-  const floats = new Float32Array(sampleCount);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let index = 0; index < sampleCount; index += 1) {
-    floats[index] = view.getInt16(index * 2, true) / 0x8000;
-  }
-  return floats;
-}
-
-function normalizeVoiceId(value?: string | null) {
-  const trimmed = value?.trim();
-  const normalized = trimmed ? trimmed.toLowerCase() : "eve";
-  return XAI_VOICE_OPTIONS.some((voice) => voice.id === normalized) ? normalized : "eve";
-}
-
-function isEditableTarget(target: EventTarget | null) {
-  const element = target as HTMLElement | null;
-  if (!element) {
-    return false;
-  }
-  const tag = element.tagName?.toLowerCase();
-  return (
-    tag === "input" ||
-    tag === "textarea" ||
-    tag === "select" ||
-    element.isContentEditable
-  );
-}
 
 function AppMark({ className = "h-4 w-4" }: { className?: string }) {
   return (
@@ -528,157 +217,6 @@ function AppMark({ className = "h-4 w-4" }: { className?: string }) {
       <path d="M180 680h-58L230 200h65l108 480h-58l-26-120H206zm22-168h96l-48-222z" fill="url(#appmark-a)" transform="translate(430,0) scale(1.0)" />
     </svg>
   );
-}
-
-async function requestMicrophoneStream() {
-  if (navigator.mediaDevices?.getUserMedia) {
-    return navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-  }
-
-  const legacyGetUserMedia =
-    (navigator as Navigator & {
-      getUserMedia?: (
-        constraints: MediaStreamConstraints,
-        onSuccess: (stream: MediaStream) => void,
-        onError: (error: Error) => void,
-      ) => void;
-      webkitGetUserMedia?: (
-        constraints: MediaStreamConstraints,
-        onSuccess: (stream: MediaStream) => void,
-        onError: (error: Error) => void,
-      ) => void;
-    }).webkitGetUserMedia ??
-    (navigator as Navigator & {
-      getUserMedia?: (
-        constraints: MediaStreamConstraints,
-        onSuccess: (stream: MediaStream) => void,
-        onError: (error: Error) => void,
-      ) => void;
-    }).getUserMedia;
-
-  if (!legacyGetUserMedia) {
-    throw new Error("Microphone capture is unavailable in this runtime.");
-  }
-
-  return new Promise<MediaStream>((resolve, reject) => {
-    legacyGetUserMedia.call(
-      navigator,
-      {
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      },
-      resolve,
-      reject,
-    );
-  });
-}
-
-function createEditorClip(asset: MediaAsset): EditorClip {
-  return {
-    id: `${asset.id}-${Date.now()}`,
-    asset,
-    trimStart: "0",
-    trimEnd: "",
-    stillDuration: "3",
-    speed: "1",
-  };
-}
-
-function parseSecondsInput(value: string, fallback?: number) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return fallback;
-  }
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return fallback;
-  }
-  return parsed;
-}
-
-function getEditorClipSpeed(clip: EditorClip) {
-  const s = parseSecondsInput(clip.speed, 1) ?? 1;
-  return Math.max(0.25, Math.min(4, s));
-}
-
-function getEditorClipDuration(clip: EditorClip) {
-  const speed = getEditorClipSpeed(clip);
-  if (clip.asset.kind === "image") {
-    return Math.max((parseSecondsInput(clip.stillDuration, 3) ?? 3) / speed, 0.5);
-  }
-  const trimStart = parseSecondsInput(clip.trimStart, 0) ?? 0;
-  const trimEnd = parseSecondsInput(clip.trimEnd);
-  if (trimEnd !== undefined && trimEnd > trimStart) {
-    return Math.max((trimEnd - trimStart) / speed, 0.5);
-  }
-  // Use actual media duration if known, otherwise fallback
-  const fallback = clip.mediaDuration ?? (clip.asset.kind === "video" ? 6 : 8);
-  return Math.max((fallback - trimStart) / speed, 0.5);
-}
-
-function formatTimelineSeconds(value: number) {
-  const rounded = value >= 10 ? value.toFixed(0) : value.toFixed(1);
-  return `${rounded.replace(/\.0$/, "")}s`;
-}
-
-function buildTimelineTrack(clips: EditorClip[], track: "visual" | "audio") {
-  let cursor = 0;
-  const items: TimelineTrackItem[] = [];
-
-  clips.forEach((clip) => {
-    const belongsToTrack = track === "visual" ? clip.asset.kind !== "audio" : clip.asset.kind === "audio";
-    if (!belongsToTrack) {
-      return;
-    }
-    const duration = getEditorClipDuration(clip);
-    items.push({
-      clip,
-      start: cursor,
-      duration,
-      end: cursor + duration,
-    });
-    cursor += duration;
-  });
-
-  return { items, duration: cursor };
-}
-
-function findClipAtTime(items: TimelineTrackItem[], time: number): TimelineTrackItem | undefined {
-  return items.find((item) => time >= item.start && time < item.end);
-}
-
-function buildClipTrimPatch(clip: EditorClip, side: "start" | "end", deltaSeconds: number): Partial<EditorClip> {
-  if (clip.asset.kind === "image") {
-    const currentDuration = getEditorClipDuration(clip);
-    const nextDuration =
-      side === "start"
-        ? Math.max(0.5, currentDuration - deltaSeconds)
-        : Math.max(0.5, currentDuration + deltaSeconds);
-    return { stillDuration: formatEditableDuration(nextDuration) };
-  }
-
-  const currentStart = parseSecondsInput(clip.trimStart, 0) ?? 0;
-  const currentDuration = getEditorClipDuration(clip);
-  const currentEnd = parseSecondsInput(clip.trimEnd, currentStart + currentDuration) ?? currentStart + currentDuration;
-
-  if (side === "start") {
-    const nextStart = Math.max(0, Math.min(currentEnd - 0.5, currentStart + deltaSeconds));
-    return { trimStart: formatEditableDuration(nextStart) };
-  }
-
-  const nextEnd = Math.max(currentStart + 0.5, currentEnd + deltaSeconds);
-  return { trimEnd: formatEditableDuration(nextEnd) };
 }
 
 function App() {
@@ -7492,13 +7030,6 @@ type TileLayout = 2 | 4 | 9;
 // ---------------------------------------------------------------------------
 // Music player components
 // ---------------------------------------------------------------------------
-
-function formatDuration(secs: number | null | undefined) {
-  if (!secs || !Number.isFinite(secs)) return "--:--";
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
 
 function MusicMiniPlayer({ onExpand, onHide }: { onExpand: () => void; onHide: () => void }) {
   const musicTracks = useAppStore((state) => state.musicTracks);
