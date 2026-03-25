@@ -72,14 +72,14 @@ import hljsSql from "highlight.js/lib/languages/sql";
 import hljsTs from "highlight.js/lib/languages/typescript";
 import hljsXml from "highlight.js/lib/languages/xml";
 import hljsYaml from "highlight.js/lib/languages/yaml";
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Terminal as XTerm } from "xterm";
 import { api, events } from "./lib/tauri";
 import { useAppStore } from "./store/appStore";
-import type { MediaAsset, Message, Settings, StreamEvent, WorkspaceItem, WorkspaceMediaFile } from "./types";
+import type { MediaAsset, Settings, StreamEvent, WorkspaceItem, WorkspaceMediaFile } from "./types";
 import {
   CHAT_MODELS,
   IMAGE_MODELS,
@@ -100,6 +100,15 @@ import { shouldStartWindowDrag, isEditableTarget } from "./utils/dom";
 import { estimateSelectedTokens } from "./utils/tokens";
 import { buildIdeTree } from "./utils/tree";
 import type { IdeTreeNode } from "./utils/tree";
+import { AppMark } from "./components/AppMark";
+import { EmptyPanel } from "./components/EmptyPanel";
+import { MessageBubble } from "./components/MessageBubble";
+import { NavTab } from "./components/NavTab";
+import { ResizeHandle } from "./components/ResizeHandle";
+import { ShellChromeContext } from "./components/ShellChromeContext";
+import type { ShellChromeActions } from "./components/ShellChromeContext";
+import { ToolCallBlock } from "./components/ToolCallBlock";
+import { TypingIndicator } from "./components/TypingIndicator";
 
 // Register highlight.js languages
 hljs.registerLanguage("bash", hljsBash);
@@ -135,11 +144,6 @@ interface DragState {
   startX: number;
   startY: number;
   startValue: number;
-}
-
-interface ShellChromeActions {
-  openBrowserPreview: (html: string) => void;
-  openEditorAsset: (asset: MediaAsset) => void;
 }
 
 interface SubtitleClip {
@@ -190,33 +194,6 @@ interface ConversationContextMenuState {
 interface ConversationRenameState {
   id: string;
   title: string;
-}
-
-const ShellChromeContext = createContext<ShellChromeActions | null>(null);
-
-
-function AppMark({ className = "h-4 w-4" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 1024 1024" aria-hidden="true" className={className}>
-      <defs>
-        <linearGradient id="appmark-bg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#0a0a0f" />
-          <stop offset="100%" stopColor="#050508" />
-        </linearGradient>
-        <linearGradient id="appmark-a" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#ff6ef9" />
-          <stop offset="30%" stopColor="#a855f7" />
-          <stop offset="60%" stopColor="#06b6d4" />
-          <stop offset="100%" stopColor="#34d399" />
-        </linearGradient>
-      </defs>
-      <rect width="1024" height="1024" rx="224" fill="url(#appmark-bg)" />
-      {/* "s" — white */}
-      <path d="M390 395c-55 0-100 40-100 90s35 72 88 85c35 9 52 22 52 42 0 25-22 43-55 43-38 0-65-18-82-45l-40 35c28 40 72 62 120 62 65 0 112-42 112-97 0-52-32-75-92-90-33-8-48-20-48-38 0-22 18-38 48-38 30 0 52 14 68 36l38-34c-24-32-62-51-109-51z" fill="#ffffff" opacity="0.95" transform="translate(30,120) scale(0.85)" />
-      {/* "A" — rainbow gradient matching ASCIIVISION button */}
-      <path d="M180 680h-58L230 200h65l108 480h-58l-26-120H206zm22-168h96l-48-222z" fill="url(#appmark-a)" transform="translate(430,0) scale(1.0)" />
-    </svg>
-  );
 }
 
 function App() {
@@ -811,32 +788,6 @@ function TopBar({
   );
 }
 
-function NavTab({
-  pageId,
-  active,
-  onClick,
-  children,
-}: {
-  pageId: AppPage;
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      data-page={pageId}
-      type="button"
-      onClick={onClick}
-      className={clsx(
-        "relative z-10 rounded-full px-2.5 py-1 text-[10px] font-semibold tracking-[0.18em] transition-colors duration-300",
-        active ? "text-emerald-50" : "text-stone-400 hover:text-stone-100",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
 function HistoryRail() {
   const conversations = useAppStore((state) => state.conversations);
   const activeConversationId = useAppStore((state) => state.activeConversation?.conversation.id);
@@ -1381,241 +1332,6 @@ function ChatPage() {
         </div>
       </div>
     </section>
-  );
-}
-
-function MessageBubble({ message }: { message: Message }) {
-  const isAssistant = message.role === "assistant";
-  return (
-    <article
-      className={clsx(
-        "max-w-[92%] rounded-[20px] border px-3.5 py-2.5 shadow-[0_16px_30px_rgba(0,0,0,0.18)]",
-        isAssistant
-          ? "border-white/8 bg-white/[0.04] text-stone-100"
-          : "ml-auto border-emerald-200/12 bg-emerald-300/10 text-emerald-50",
-      )}
-    >
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] uppercase tracking-[0.28em] text-stone-300">
-            {isAssistant ? "Assistant" : "You"}
-          </p>
-          <p className="mt-1 font-['IBM_Plex_Mono'] text-[10px] text-stone-400">
-            {message.modelId ?? "local"} · {message.status === "streaming" ? "Generating…" : message.status}
-          </p>
-        </div>
-        {message.usage ? (
-          <p className="font-['IBM_Plex_Mono'] text-[10px] text-stone-400">
-            in {message.usage.inputTokens ?? 0} / out {message.usage.outputTokens ?? 0}
-          </p>
-        ) : null}
-      </div>
-
-      {isAssistant ? (
-        <div className="prose prose-invert prose-pre:rounded-xl prose-pre:border prose-pre:border-white/8 prose-pre:bg-black/40 prose-code:font-['IBM_Plex_Mono'] max-w-none text-[12px] leading-6">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              code({ className, children, ...props }) {
-                const language = className?.replace("language-", "");
-                const code = String(children ?? "").replace(/\n$/, "");
-                const inline = !className;
-                if (inline) {
-                  return (
-                    <code className={className} {...props}>
-                      {children}
-                    </code>
-                  );
-                }
-                return <CodeBlock code={code} language={language} />;
-              },
-            }}
-          >
-            {message.content || "…"}
-          </ReactMarkdown>
-          {!message.content && message.status === "streaming" ? <TypingIndicator /> : null}
-        </div>
-      ) : (
-        <p className="whitespace-pre-wrap text-[12px] leading-6">{message.content}</p>
-      )}
-
-      {message.error ? <p className="mt-3 text-[10px] text-rose-200">{message.error}</p> : null}
-    </article>
-  );
-}
-
-function TypingIndicator() {
-  return (
-    <span className="inline-flex items-center gap-1">
-      <span className="typing-dot" />
-      <span className="typing-dot" />
-      <span className="typing-dot" />
-    </span>
-  );
-}
-
-function CodeBlock({ code, language }: { code: string; language?: string }) {
-  const chrome = useContext(ShellChromeContext);
-  const label = (language ?? "code").toLowerCase();
-  const [copied, setCopied] = useState(false);
-  const [collapsed, setCollapsed] = useState(code.split("\n").length > 60);
-  const lineCount = code.split("\n").length;
-
-  const highlighted = useMemo(() => {
-    const lang = (language ?? "").toLowerCase();
-    if (lang && hljs.getLanguage(lang)) {
-      try {
-        return hljs.highlight(code, { language: lang }).value;
-      } catch {
-        // fallback
-      }
-    }
-    try {
-      return hljs.highlightAuto(code).value;
-    } catch {
-      return null;
-    }
-  }, [code, language]);
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleDownload = () => {
-    const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `snippet.${extensionForLanguage(language)}`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  };
-
-  return (
-    <div className="my-4 overflow-hidden rounded-[18px] border border-white/8 bg-[#0a0d0f] shadow-[0_10px_30px_rgba(0,0,0,0.24)]">
-      <div className="flex items-center justify-between gap-3 border-b border-white/8 bg-white/[0.03] px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className="font-['IBM_Plex_Mono'] text-[10px] uppercase tracking-[0.18em] text-stone-400">
-            {label}
-          </span>
-          <span className="font-['IBM_Plex_Mono'] text-[10px] text-stone-500">
-            {lineCount} lines
-          </span>
-          {lineCount > 60 && (
-            <button
-              type="button"
-              onClick={() => setCollapsed(!collapsed)}
-              className="text-[10px] text-sky-300/70 hover:text-sky-300"
-            >
-              {collapsed ? "Expand" : "Collapse"}
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void handleCopy()}
-            className="inline-flex items-center gap-1 rounded-lg border border-white/8 bg-white/5 px-2 py-1 text-[10px] text-stone-300 transition hover:bg-white/10"
-          >
-            <Copy className="h-3 w-3" />
-            {copied ? "Copied!" : "Copy"}
-          </button>
-          <button
-            type="button"
-            onClick={handleDownload}
-            className="inline-flex items-center gap-1 rounded-lg border border-white/8 bg-white/5 px-2 py-1 text-[10px] text-stone-300 transition hover:bg-white/10"
-          >
-            <Download className="h-3 w-3" />
-            Download
-          </button>
-          <button
-            type="button"
-            onClick={() => chrome?.openBrowserPreview(buildPreviewDocument(code, language))}
-            className="inline-flex items-center gap-1 rounded-lg border border-sky-300/18 bg-sky-300/10 px-2 py-1 text-[10px] text-sky-100 transition hover:bg-sky-300/16"
-          >
-            <Eye className="h-3 w-3" />
-            Preview
-          </button>
-        </div>
-      </div>
-      <pre
-        className={clsx(
-          "m-0 overflow-x-auto px-4 py-4 font-['IBM_Plex_Mono'] text-[10px] leading-6 text-stone-200",
-          collapsed && "max-h-48 overflow-y-hidden",
-        )}
-      >
-        {highlighted ? (
-          <code dangerouslySetInnerHTML={{ __html: highlighted }} />
-        ) : (
-          <code>{code}</code>
-        )}
-      </pre>
-      {collapsed && (
-        <div className="border-t border-white/5 bg-gradient-to-t from-[#0a0d0f] to-transparent px-4 py-2 text-center">
-          <button
-            type="button"
-            onClick={() => setCollapsed(false)}
-            className="text-[10px] text-sky-300/70 hover:text-sky-300"
-          >
-            Show all {lineCount} lines
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ToolCallBlock({ toolName, args, result, success, isRunning }: {
-  toolName: string;
-  args: string;
-  result?: string;
-  success?: boolean;
-  isRunning?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const statusColor = isRunning ? "text-amber-300" : success ? "text-emerald-300" : "text-rose-300";
-  const statusBorder = isRunning ? "border-amber-300/20" : success ? "border-emerald-300/20" : "border-rose-300/20";
-  const statusBg = isRunning ? "bg-amber-300/5" : success ? "bg-emerald-300/5" : "bg-rose-300/5";
-
-  return (
-    <div className={clsx("my-2 overflow-hidden rounded-xl border", statusBorder, statusBg)}>
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-      >
-        <Code2 className={clsx("h-3 w-3 shrink-0", statusColor)} />
-        <span className={clsx("font-['IBM_Plex_Mono'] text-[10px] font-semibold", statusColor)}>
-          {toolName}
-        </span>
-        <span className="text-[10px] text-stone-500">
-          {isRunning ? "running…" : success ? "completed" : "failed"}
-        </span>
-        <ChevronRight className={clsx("ml-auto h-3 w-3 text-stone-500 transition", expanded && "rotate-90")} />
-      </button>
-      {expanded && (
-        <div className="border-t border-white/5 px-3 py-2">
-          {args && (
-            <div className="mb-2">
-              <p className="mb-1 text-[9px] uppercase tracking-wider text-stone-500">Input</p>
-              <pre className="overflow-x-auto rounded-lg bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-300">
-                {(() => { try { return JSON.stringify(JSON.parse(args), null, 2); } catch { return args; } })()}
-              </pre>
-            </div>
-          )}
-          {result && (
-            <div>
-              <p className="mb-1 text-[9px] uppercase tracking-wider text-stone-500">Output</p>
-              <pre className="max-h-64 overflow-auto rounded-lg bg-black/30 px-3 py-2 font-['IBM_Plex_Mono'] text-[10px] text-stone-300">
-                {result.length > 3000 ? `${result.slice(0, 3000)}\n\n... (truncated)` : result}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -8486,46 +8202,6 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
 
         </div>{/* end scroll wrapper */}
       </div>
-    </div>
-  );
-}
-
-function EmptyPanel({
-  eyebrow,
-  title,
-  body,
-}: {
-  eyebrow: string;
-  title: string;
-  body: string;
-}) {
-  return (
-    <div className="rounded-[22px] border border-dashed border-white/8 bg-white/[0.02] p-4">
-      <p className="text-[10px] uppercase tracking-[0.35em] text-[#84a09b]">{eyebrow}</p>
-      <h3 className="mt-2.5 text-[13px] font-semibold text-stone-100">{title}</h3>
-      <p className="mt-2 text-[11px] leading-6 text-stone-500">{body}</p>
-    </div>
-  );
-}
-
-function ResizeHandle({
-  orientation,
-  onPointerDown,
-}: {
-  orientation: "vertical" | "horizontal";
-  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
-}) {
-  return (
-    <div
-      onPointerDown={onPointerDown}
-      className={clsx("relative bg-transparent", orientation === "vertical" ? "cursor-col-resize" : "cursor-row-resize")}
-    >
-      <div
-        className={clsx(
-          "absolute inset-0 m-auto rounded-full bg-white/6 transition hover:bg-white/12",
-          orientation === "vertical" ? "h-16 w-[2px]" : "h-[2px] w-16",
-        )}
-      />
     </div>
   );
 }
