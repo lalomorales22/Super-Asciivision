@@ -20,7 +20,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useDragResize } from "../hooks/useDragResize";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, events } from "../lib/tauri";
@@ -141,7 +142,6 @@ function IdeCodeEditor({
           onKeyDown={handleKeyDown}
           spellCheck={false}
           className="relative z-10 h-full w-full resize-none whitespace-pre bg-transparent px-4 py-3 font-['IBM_Plex_Mono'] text-[11px] leading-[20px] text-transparent caret-emerald-300 outline-none"
-          style={{ caretColor: "#6ee7b7" }}
         />
       </div>
     </div>
@@ -188,7 +188,8 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const [ideLeftWidth, setIdeLeftWidth] = useState(240);
   const [ideRightWidth, setIdeRightWidth] = useState(340);
   const [ideViewportWidth, setIdeViewportWidth] = useState(() => window.innerWidth);
-  const [ideDragPane, setIdeDragPane] = useState<{ side: "left" | "right"; startX: number; startValue: number }>();
+  const [, startIdeLeftDrag] = useDragResize("x", useCallback((sv: number, d: number) => setIdeLeftWidth(sv + d), []));
+  const [, startIdeRightDrag] = useDragResize("x", useCallback((sv: number, d: number) => setIdeRightWidth(sv - d), []));
 
   const workspaceItems = activeWorkspaceId ? workspaceItemsMap[activeWorkspaceId] ?? [] : [];
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
@@ -223,27 +224,6 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  useEffect(() => {
-    if (!ideDragPane) {
-      return undefined;
-    }
-
-    const onPointerMove = (event: PointerEvent) => {
-      if (ideDragPane.side === "left") {
-        setIdeLeftWidth(ideDragPane.startValue + (event.clientX - ideDragPane.startX));
-        return;
-      }
-      setIdeRightWidth(ideDragPane.startValue - (event.clientX - ideDragPane.startX));
-    };
-
-    const onPointerUp = () => setIdeDragPane(undefined);
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-    };
-  }, [ideDragPane]);
 
   useEffect(() => {
     setQuery("");
@@ -868,14 +848,12 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
 
           <ResizeHandle
             orientation="vertical"
-            onPointerDown={(event) =>
-              setIdeDragPane({ side: "left", startX: event.clientX, startValue: clampedIdeLeftWidth })
-            }
+            onPointerDown={(event) => startIdeLeftDrag(event, clampedIdeLeftWidth)}
           />
 
           <section className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] overflow-hidden bg-[linear-gradient(180deg,rgba(8,9,11,0.99),rgba(6,7,9,0.98))]">
             {/* Tab bar */}
-            <div className="flex items-center gap-0 overflow-x-auto border-b border-white/6 bg-[rgba(6,7,9,0.98)]" style={{ scrollbarWidth: "none" }}>
+            <div className="flex items-center gap-0 overflow-x-auto border-b border-white/6 bg-[rgba(6,7,9,0.98)] [scrollbar-width:none]">
               {openTabs.map((tabPath) => {
                 const isActive = tabPath === activeFilePath;
                 const tabEntry = tabContents[tabPath];
@@ -1028,9 +1006,7 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
 
           <ResizeHandle
             orientation="vertical"
-            onPointerDown={(event) =>
-              setIdeDragPane({ side: "right", startX: event.clientX, startValue: clampedIdeRightWidth })
-            }
+            onPointerDown={(event) => startIdeRightDrag(event, clampedIdeRightWidth)}
           />
 
           <aside className="flex min-h-0 flex-col overflow-hidden border-l border-white/6 bg-[rgba(10,11,13,0.97)]">

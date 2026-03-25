@@ -1,8 +1,8 @@
 import clsx from "clsx";
 import { ChevronRight, Code2 } from "lucide-react";
-import { useState } from "react";
+import React, { useState } from "react";
 
-export function ToolCallBlock({ toolName, args, result, success, isRunning }: {
+export const ToolCallBlock = React.memo(function ToolCallBlock({ toolName, args, result, success, isRunning }: {
   toolName: string;
   args: string;
   result?: string;
@@ -52,4 +52,4 @@ export function ToolCallBlock({ toolName, args, result, success, isRunning }: {
       )}
     </div>
   );
-}
+});

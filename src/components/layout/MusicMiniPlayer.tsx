@@ -73,7 +73,7 @@ export function MusicMiniPlayer({ onExpand, onHide }: { onExpand: () => void; on
           <img src={track.coverArtDataUrl} alt="" className="h-9 w-9 rounded-lg object-cover shadow-md" />
         ) : (
           <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-gradient-to-br from-emerald-500/20 to-purple-500/20">
-            <Disc3 className={clsx("h-4 w-4 text-emerald-200", playing && "animate-spin")} style={{ animationDuration: "3s" }} />
+            <Disc3 className={clsx("h-4 w-4 text-emerald-200", playing && "animate-spin [animation-duration:3s]")} />
           </div>
         )}
       </button>

@@ -1,11 +1,12 @@
 import clsx from "clsx";
+import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Message } from "../types";
 import { CodeBlock } from "./CodeBlock";
 import { TypingIndicator } from "./TypingIndicator";
 
-export function MessageBubble({ message }: { message: Message }) {
+export const MessageBubble = React.memo(function MessageBubble({ message }: { message: Message }) {
   const isAssistant = message.role === "assistant";
   return (
     <article
@@ -63,4 +64,4 @@ export function MessageBubble({ message }: { message: Message }) {
       {message.error ? <p className="mt-3 text-[10px] text-rose-200">{message.error}</p> : null}
     </article>
   );
-}
+});

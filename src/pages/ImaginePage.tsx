@@ -11,7 +11,7 @@ import {
   Video,
   WandSparkles,
 } from "lucide-react";
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../lib/tauri";
 import { useAppStore } from "../store/appStore";
@@ -517,7 +517,7 @@ function GeneratingMediaCard({ prompt }: { prompt: string }) {
 // Module-level preview cache: shared across all MediaAssetCards, survives re-renders
 const _mediaPreviewCache = new Map<string, string>();
 
-export function MediaAssetCard({ asset, onShowBrowser }: { asset: MediaAsset; onShowBrowser: () => void }) {
+export const MediaAssetCard = React.memo(function MediaAssetCard({ asset, onShowBrowser }: { asset: MediaAsset; onShowBrowser: () => void }) {
   const chrome = useContext(ShellChromeContext);
   const mediaCategories = useMediaStore((state) => state.mediaCategories);
   const moveMediaAssetToCategory = useMediaStore((state) => state.moveMediaAssetToCategory);
@@ -786,4 +786,4 @@ export function MediaAssetCard({ asset, onShowBrowser }: { asset: MediaAsset; on
         : null}
     </article>
   );
-}
+});

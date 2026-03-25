@@ -1,7 +1,8 @@
 import clsx from "clsx";
 import { Files, Globe } from "lucide-react";
-import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useDragResize } from "../../hooks/useDragResize";
 import { useAppStore } from "../../store/appStore";
 import { useMusicStore } from "../../store/musicStore";
 import { useTerminalStore } from "../../store/terminalStore";
@@ -35,14 +36,6 @@ import { TopBar } from "./TopBar";
 import { WorkspaceDrawer } from "./WorkspaceDrawer";
 
 type RightPanelMode = "workspace" | "browser";
-type DragMode = "left" | "right" | "footer";
-
-interface DragState {
-  mode: DragMode;
-  startX: number;
-  startY: number;
-  startValue: number;
-}
 
 export function GrokShell() {
   const settingsOpen = useAppStore((state) => state.settingsOpen);
@@ -64,7 +57,9 @@ export function GrokShell() {
   const [overlayClips, setOverlayClips] = useState<OverlayClip[]>([]);
   const [editorAspect, setEditorAspect] = useState<"landscape" | "vertical">("landscape");
   const editorClipboardRef = useRef<EditorClip | null>(null);
-  const [dragState, setDragState] = useState<DragState | null>(null);
+  const [, startLeftDrag] = useDragResize("x", useCallback((sv: number, d: number) => setLeftWidth(sv + d), []));
+  const [, startRightDrag] = useDragResize("x", useCallback((sv: number, d: number) => setRightWidth(sv - d), []));
+  const [, startFooterDrag] = useDragResize("y", useCallback((sv: number, d: number) => setFooterHeight(sv - d), []));
   const [controlsOpen, setControlsOpen] = useState(false);
   const controlsRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState(() => ({
@@ -78,32 +73,6 @@ export function GrokShell() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  useEffect(() => {
-    if (!dragState) {
-      return undefined;
-    }
-
-    const onPointerMove = (event: PointerEvent) => {
-      if (dragState.mode === "left") {
-        setLeftWidth(dragState.startValue + (event.clientX - dragState.startX));
-        return;
-      }
-      if (dragState.mode === "right") {
-        setRightWidth(dragState.startValue - (event.clientX - dragState.startX));
-        return;
-      }
-      setFooterHeight(dragState.startValue - (event.clientY - dragState.startY));
-    };
-
-    const onPointerUp = () => setDragState(null);
-
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-    };
-  }, [dragState]);
 
   useEffect(() => {
     if (!controlsOpen) {
@@ -239,14 +208,7 @@ export function GrokShell() {
           {showHistoryRail ? (
             <ResizeHandle
               orientation="vertical"
-              onPointerDown={(event) =>
-                setDragState({
-                  mode: "left",
-                  startX: event.clientX,
-                  startY: event.clientY,
-                  startValue: clampedLeftWidth,
-                })
-              }
+              onPointerDown={(event) => startLeftDrag(event, clampedLeftWidth)}
             />
           ) : null}
 
@@ -297,14 +259,7 @@ export function GrokShell() {
           {showShellRightSidebar ? (
             <ResizeHandle
               orientation="vertical"
-              onPointerDown={(event) =>
-                setDragState({
-                  mode: "right",
-                  startX: event.clientX,
-                  startY: event.clientY,
-                  startValue: clampedRightWidth,
-                })
-              }
+              onPointerDown={(event) => startRightDrag(event, clampedRightWidth)}
             />
           ) : (
             <div />
@@ -331,14 +286,7 @@ export function GrokShell() {
               <div className="col-[1/-1]">
                 <ResizeHandle
                   orientation="horizontal"
-                  onPointerDown={(event) =>
-                    setDragState({
-                      mode: "footer",
-                      startX: event.clientX,
-                      startY: event.clientY,
-                      startValue: clampedFooterHeight,
-                    })
-                  }
+                  onPointerDown={(event) => startFooterDrag(event, clampedFooterHeight)}
                 />
               </div>
               <div className="col-[1/-1] min-h-0 overflow-hidden">

@@ -1,12 +1,12 @@
 import clsx from "clsx";
 import hljs from "highlight.js/lib/core";
 import { Copy, Download, Eye } from "lucide-react";
-import { useContext, useMemo, useState } from "react";
+import React, { useContext, useMemo, useState } from "react";
 import { extensionForLanguage } from "../utils/paths";
 import { buildPreviewDocument } from "../utils/html";
 import { ShellChromeContext } from "./ShellChromeContext";
 
-export function CodeBlock({ code, language }: { code: string; language?: string }) {
+export const CodeBlock = React.memo(function CodeBlock({ code, language }: { code: string; language?: string }) {
   const chrome = useContext(ShellChromeContext);
   const label = (language ?? "code").toLowerCase();
   const [copied, setCopied] = useState(false);
@@ -117,4 +117,4 @@ export function CodeBlock({ code, language }: { code: string; language?: string 
       )}
     </div>
   );
-}
+});

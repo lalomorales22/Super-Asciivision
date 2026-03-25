@@ -1,7 +1,8 @@
 import clsx from "clsx";
+import React from "react";
 import type { AppPage } from "../types";
 
-export function NavTab({
+export const NavTab = React.memo(function NavTab({
   pageId,
   active,
   onClick,
@@ -25,4 +26,4 @@ export function NavTab({
       {children}
     </button>
   );
-}
+});

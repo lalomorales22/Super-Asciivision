@@ -18,10 +18,12 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { List } from "react-window";
 import { createPortal } from "react-dom";
 import { api } from "../lib/tauri";
 import { useMusicStore } from "../store/musicStore";
+import type { MusicTrack } from "../types";
 import { formatDuration } from "../utils/formatting";
 
 export function MusicPage() {
@@ -48,6 +50,18 @@ export function MusicPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [folderDisplay, setFolderDisplay] = useState("");
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; track: typeof musicTracks[number] } | null>(null);
+  const listContainerRef = useRef<HTMLDivElement>(null);
+  const [listHeight, setListHeight] = useState(400);
+
+  useEffect(() => {
+    const el = listContainerRef.current;
+    if (!el) return;
+    const update = () => setListHeight(el.clientHeight);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const track = currentIndex >= 0 && currentIndex < musicTracks.length ? musicTracks[currentIndex] : null;
 
@@ -202,8 +216,7 @@ export function MusicPage() {
             ) : (
               <div className="flex h-48 w-48 items-center justify-center rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/15 via-purple-500/10 to-sky-500/15 shadow-[0_24px_64px_rgba(0,0,0,0.4)]">
                 <Disc3
-                  className={clsx("h-20 w-20 text-emerald-200/60", playing && "animate-spin")}
-                  style={{ animationDuration: "3s" }}
+                  className={clsx("h-20 w-20 text-emerald-200/60", playing && "animate-spin [animation-duration:3s]")}
                 />
               </div>
             )}
@@ -313,7 +326,7 @@ export function MusicPage() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div ref={listContainerRef} className="min-h-0 flex-1 overflow-hidden">
             {filteredTracks.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
                 <div className="flex h-16 w-16 items-center justify-center rounded-full border border-white/8 bg-white/[0.03]">
@@ -331,59 +344,18 @@ export function MusicPage() {
                 </div>
               </div>
             ) : (
-              <div className="divide-y divide-white/[0.04]">
-                {filteredTracks.map((t) => {
-                  const globalIdx = musicTracks.indexOf(t);
-                  const isActive = globalIdx === currentIndex;
-                  return (
-                    <button
-                      key={t.filePath}
-                      type="button"
-                      onClick={() => {
-                        setCurrentIndex(globalIdx);
-                      }}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setCtxMenu({ x: e.clientX, y: e.clientY, track: t });
-                      }}
-                      className={clsx(
-                        "flex w-full items-center gap-3 px-4 py-2.5 text-left transition",
-                        isActive
-                          ? "bg-emerald-300/[0.06]"
-                          : "hover:bg-white/[0.03]",
-                      )}
-                    >
-                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center">
-                        {isActive && playing ? (
-                          <div className="flex items-end gap-[2px]">
-                            <span className="h-3 w-[3px] rounded-full bg-emerald-400 animate-pulse" />
-                            <span className="h-5 w-[3px] rounded-full bg-emerald-300 animate-pulse [animation-delay:120ms]" />
-                            <span className="h-4 w-[3px] rounded-full bg-emerald-400 animate-pulse [animation-delay:240ms]" />
-                          </div>
-                        ) : t.coverArtDataUrl ? (
-                          <img src={t.coverArtDataUrl} alt="" className="h-9 w-9 rounded-lg object-cover" />
-                        ) : (
-                          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/8 bg-white/[0.03]">
-                            <Music className="h-4 w-4 text-stone-500" />
-                          </div>
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className={clsx("truncate text-[11px] font-medium", isActive ? "text-emerald-200" : "text-stone-200")}>
-                          {t.title ?? t.fileName}
-                        </p>
-                        <p className="truncate text-[9px] text-stone-500">
-                          {t.artist ?? "Unknown artist"}
-                          {t.album ? ` · ${t.album}` : ""}
-                        </p>
-                      </div>
-                      <span className="font-['IBM_Plex_Mono'] text-[9px] text-stone-500">
-                        {formatDuration(t.durationSecs)}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <VirtualizedTrackList
+                tracks={filteredTracks}
+                allTracks={musicTracks}
+                currentIndex={currentIndex}
+                playing={playing}
+                height={listHeight}
+                onTrackSelect={setCurrentIndex}
+                onTrackContextMenu={(e, track) => {
+                  e.preventDefault();
+                  setCtxMenu({ x: e.clientX, y: e.clientY, track });
+                }}
+              />
             )}
           </div>
         </section>
@@ -438,3 +410,116 @@ export function MusicPage() {
     </section>
   );
 }
+
+const TRACK_ROW_HEIGHT = 49;
+
+interface TrackRowExtraProps {
+  tracks: MusicTrack[];
+  allTracks: MusicTrack[];
+  currentIndex: number;
+  playing: boolean;
+  onTrackSelect: (index: number) => void;
+  onTrackContextMenu: (e: React.MouseEvent, track: MusicTrack) => void;
+}
+
+function VirtualTrackRow({
+  index,
+  style,
+  tracks,
+  allTracks,
+  currentIndex,
+  playing,
+  onTrackSelect,
+  onTrackContextMenu,
+}: { ariaAttributes: Record<string, unknown>; index: number; style: React.CSSProperties } & TrackRowExtraProps) {
+  const t = tracks[index];
+  const globalIdx = allTracks.indexOf(t);
+  return (
+    <div style={style}>
+      <TrackRow
+        track={t}
+        isActive={globalIdx === currentIndex}
+        isPlaying={playing}
+        onSelect={() => onTrackSelect(globalIdx)}
+        onContextMenu={(e) => onTrackContextMenu(e, t)}
+      />
+    </div>
+  );
+}
+
+function VirtualizedTrackList({
+  tracks,
+  allTracks,
+  currentIndex,
+  playing,
+  height,
+  onTrackSelect,
+  onTrackContextMenu,
+}: TrackRowExtraProps & { height: number }) {
+  return (
+    <List<TrackRowExtraProps>
+      rowComponent={VirtualTrackRow}
+      rowCount={tracks.length}
+      rowHeight={TRACK_ROW_HEIGHT}
+      rowProps={{ tracks, allTracks, currentIndex, playing, onTrackSelect, onTrackContextMenu }}
+      overscanCount={10}
+      style={{ height }}
+    />
+  );
+}
+
+const TrackRow = React.memo(function TrackRow({
+  track: t,
+  isActive,
+  isPlaying,
+  onSelect,
+  onContextMenu,
+}: {
+  track: MusicTrack;
+  isActive: boolean;
+  isPlaying: boolean;
+  onSelect: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      onContextMenu={onContextMenu}
+      className={clsx(
+        "flex w-full items-center gap-3 px-4 py-2.5 text-left transition",
+        isActive
+          ? "bg-emerald-300/[0.06]"
+          : "hover:bg-white/[0.03]",
+      )}
+    >
+      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center">
+        {isActive && isPlaying ? (
+          <div className="flex items-end gap-[2px]">
+            <span className="h-3 w-[3px] rounded-full bg-emerald-400 animate-pulse" />
+            <span className="h-5 w-[3px] rounded-full bg-emerald-300 animate-pulse [animation-delay:120ms]" />
+            <span className="h-4 w-[3px] rounded-full bg-emerald-400 animate-pulse [animation-delay:240ms]" />
+          </div>
+        ) : t.coverArtDataUrl ? (
+          <img src={t.coverArtDataUrl} alt="" className="h-9 w-9 rounded-lg object-cover" />
+        ) : (
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/8 bg-white/[0.03]">
+            <Music className="h-4 w-4 text-stone-500" />
+          </div>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className={clsx("truncate text-[11px] font-medium", isActive ? "text-emerald-200" : "text-stone-200")}>
+          {t.title ?? t.fileName}
+        </p>
+        <p className="truncate text-[9px] text-stone-500">
+          {t.artist ?? "Unknown artist"}
+          {t.album ? ` · ${t.album}` : ""}
+        </p>
+      </div>
+      <span className="font-['IBM_Plex_Mono'] text-[9px] text-stone-500">
+        {formatDuration(t.durationSecs)}
+      </span>
+    </button>
+  );
+});

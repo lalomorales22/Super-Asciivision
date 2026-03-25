@@ -1,7 +1,8 @@
 import clsx from "clsx";
 import QRCode from "qrcode";
 import { Wifi } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useDragResize } from "../hooks/useDragResize";
 import { useAppStore } from "../store/appStore";
 import { useHandsStore } from "../store/handsStore";
 import { EmptyPanel } from "../components/EmptyPanel";
@@ -22,7 +23,10 @@ export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void 
   const [relayUrl, setRelayUrl] = useState(settings?.handsRelayUrl ?? "");
   const [savingSetup, setSavingSetup] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(360);
-  const [sidebarDragState, setSidebarDragState] = useState<{ startX: number; startValue: number } | null>(null);
+  const [, startSidebarDrag] = useDragResize(
+    "x",
+    useCallback((startValue: number, delta: number) => setSidebarWidth(startValue - delta), []),
+  );
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [qrCodeUrl, setQrCodeUrl] = useState<string>();
 
@@ -42,23 +46,6 @@ export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void 
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  useEffect(() => {
-    if (!sidebarDragState) {
-      return undefined;
-    }
-
-    const onPointerMove = (event: PointerEvent) => {
-      setSidebarWidth(sidebarDragState.startValue - (event.clientX - sidebarDragState.startX));
-    };
-    const onPointerUp = () => setSidebarDragState(null);
-
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-    };
-  }, [sidebarDragState]);
 
   const isRunning = handsStatus?.state === "running";
   const publicUrl = handsStatus?.publicUrl ?? "";
@@ -532,12 +519,7 @@ export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void 
         <>
           <ResizeHandle
             orientation="vertical"
-            onPointerDown={(event) =>
-              setSidebarDragState({
-                startX: event.clientX,
-                startValue: clampedSidebarWidth,
-              })
-            }
+            onPointerDown={(event) => startSidebarDrag(event, clampedSidebarWidth)}
           />
           <aside className="min-h-0 overflow-y-auto">
             <div className="space-y-3 rounded-[26px] border border-white/8 bg-[linear-gradient(180deg,rgba(10,11,13,0.99),rgba(7,8,10,0.98))] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
