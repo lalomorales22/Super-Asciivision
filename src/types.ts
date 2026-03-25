@@ -1,3 +1,5 @@
+export type AppPage = "tiles" | "chat" | "imagine" | "voice" | "editor" | "ide" | "hands" | "music";
+
 export type ProviderId = "xai" | "ollama";
 
 export interface ProviderStatus {

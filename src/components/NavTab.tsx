@@ -1,6 +1,5 @@
 import clsx from "clsx";
-
-type AppPage = "tiles" | "chat" | "imagine" | "voice" | "editor" | "ide" | "hands" | "music";
+import type { AppPage } from "../types";
 
 export function NavTab({
   pageId,
