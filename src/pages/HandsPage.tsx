@@ -3,6 +3,7 @@ import QRCode from "qrcode";
 import { Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAppStore } from "../store/appStore";
+import { useHandsStore } from "../store/handsStore";
 import { EmptyPanel } from "../components/EmptyPanel";
 import { ResizeHandle } from "../components/ResizeHandle";
 import { clamp, formatTimestamp } from "../utils/formatting";
@@ -10,12 +11,12 @@ import type { AppPage } from "../types";
 
 export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void }) {
   const settings = useAppStore((state) => state.settings);
-  const handsStatus = useAppStore((state) => state.handsStatus);
-  const handsBusy = useAppStore((state) => state.handsBusy);
   const saveSettings = useAppStore((state) => state.saveSettings);
-  const refreshHandsStatus = useAppStore((state) => state.refreshHandsStatus);
-  const startHandsService = useAppStore((state) => state.startHandsService);
-  const stopHandsService = useAppStore((state) => state.stopHandsService);
+  const handsStatus = useHandsStore((state) => state.handsStatus);
+  const handsBusy = useHandsStore((state) => state.handsBusy);
+  const refreshHandsStatus = useHandsStore((state) => state.refreshHandsStatus);
+  const startHandsService = useHandsStore((state) => state.startHandsService);
+  const stopHandsService = useHandsStore((state) => state.stopHandsService);
   const [provider, setProvider] = useState(settings?.handsTunnelProvider ?? "relay");
   const [tunnelExecutable, setTunnelExecutable] = useState(settings?.handsTunnelExecutable ?? "");
   const [relayUrl, setRelayUrl] = useState(settings?.handsRelayUrl ?? "");

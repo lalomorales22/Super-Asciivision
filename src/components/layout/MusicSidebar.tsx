@@ -2,18 +2,18 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import clsx from "clsx";
 import { FolderPlus, Hash, ListMusic, Music, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useAppStore } from "../../store/appStore";
+import { useMusicStore } from "../../store/musicStore";
 
 export function MusicSidebar() {
-  const musicCategories = useAppStore((s) => s.musicCategories);
-  const musicTracks = useAppStore((s) => s.musicTracks);
-  const activeMusicCategory = useAppStore((s) => s.activeMusicCategory);
-  const setActiveMusicCategory = useAppStore((s) => s.setActiveMusicCategory);
-  const refreshMusicCategories = useAppStore((s) => s.refreshMusicCategories);
-  const createMusicCategory = useAppStore((s) => s.createMusicCategory);
-  const deleteMusicCategory = useAppStore((s) => s.deleteMusicCategory);
-  const importMusicFiles = useAppStore((s) => s.importMusicFiles);
-  const refreshMusicLibrary = useAppStore((s) => s.refreshMusicLibrary);
+  const musicCategories = useMusicStore((s) => s.musicCategories);
+  const musicTracks = useMusicStore((s) => s.musicTracks);
+  const activeMusicCategory = useMusicStore((s) => s.activeMusicCategory);
+  const setActiveMusicCategory = useMusicStore((s) => s.setActiveMusicCategory);
+  const refreshMusicCategories = useMusicStore((s) => s.refreshMusicCategories);
+  const createMusicCategory = useMusicStore((s) => s.createMusicCategory);
+  const deleteMusicCategory = useMusicStore((s) => s.deleteMusicCategory);
+  const importMusicFiles = useMusicStore((s) => s.importMusicFiles);
+  const refreshMusicLibrary = useMusicStore((s) => s.refreshMusicLibrary);
 
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [showNewPlaylist, setShowNewPlaylist] = useState(false);

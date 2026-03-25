@@ -15,6 +15,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "r
 import { createPortal } from "react-dom";
 import { api } from "../lib/tauri";
 import { useAppStore } from "../store/appStore";
+import { useMediaStore } from "../store/mediaStore";
 import type { MediaAsset } from "../types";
 import {
   IMAGE_MODELS,
@@ -30,18 +31,18 @@ import { ShellChromeContext } from "../components/ShellChromeContext";
 
 export function ImaginePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const settings = useAppStore((state) => state.settings);
-  const mediaCategories = useAppStore((state) => state.mediaCategories);
-  const mediaAssets = useAppStore((state) => state.mediaAssets);
-  const generatingImage = useAppStore((state) => state.generatingImage);
-  const generatingVideo = useAppStore((state) => state.generatingVideo);
-  const createMediaCategory = useAppStore((state) => state.createMediaCategory);
-  const renameMediaCategory = useAppStore((state) => state.renameMediaCategory);
-  const deleteMediaCategory = useAppStore((state) => state.deleteMediaCategory);
-  const generateImage = useAppStore((state) => state.generateImage);
-  const generateVideo = useAppStore((state) => state.generateVideo);
-  const ensureMediaLoaded = useAppStore((state) => state.ensureMediaLoaded);
   const providerStatuses = useAppStore((state) => state.providerStatuses);
   const models = useAppStore((state) => state.models);
+  const mediaCategories = useMediaStore((state) => state.mediaCategories);
+  const mediaAssets = useMediaStore((state) => state.mediaAssets);
+  const generatingImage = useMediaStore((state) => state.generatingImage);
+  const generatingVideo = useMediaStore((state) => state.generatingVideo);
+  const createMediaCategory = useMediaStore((state) => state.createMediaCategory);
+  const renameMediaCategory = useMediaStore((state) => state.renameMediaCategory);
+  const deleteMediaCategory = useMediaStore((state) => state.deleteMediaCategory);
+  const generateImage = useMediaStore((state) => state.generateImage);
+  const generateVideo = useMediaStore((state) => state.generateVideo);
+  const ensureMediaLoaded = useMediaStore((state) => state.ensureMediaLoaded);
   const ollamaReady = providerStatuses.find((s) => s.providerId === "ollama")?.available ?? false;
   const ollamaImageAvailable = ollamaReady && models.ollama.some((m) => OLLAMA_IMAGE_MODELS.some((om) => m.modelId.startsWith(om.split(":")[0])));
   const [mode, setMode] = useState<"image" | "video">("image");
@@ -518,10 +519,10 @@ const _mediaPreviewCache = new Map<string, string>();
 
 export function MediaAssetCard({ asset, onShowBrowser }: { asset: MediaAsset; onShowBrowser: () => void }) {
   const chrome = useContext(ShellChromeContext);
-  const mediaCategories = useAppStore((state) => state.mediaCategories);
-  const moveMediaAssetToCategory = useAppStore((state) => state.moveMediaAssetToCategory);
-  const renameMediaAsset = useAppStore((state) => state.renameMediaAsset);
-  const deleteMediaAsset = useAppStore((state) => state.deleteMediaAsset);
+  const mediaCategories = useMediaStore((state) => state.mediaCategories);
+  const moveMediaAssetToCategory = useMediaStore((state) => state.moveMediaAssetToCategory);
+  const renameMediaAsset = useMediaStore((state) => state.renameMediaAsset);
+  const deleteMediaAsset = useMediaStore((state) => state.deleteMediaAsset);
   const [src, setSrc] = useState<string | undefined>(() => _mediaPreviewCache.get(asset.filePath));
   const [titleDraft, setTitleDraft] = useState(asset.prompt);
   const [hovered, setHovered] = useState(false);

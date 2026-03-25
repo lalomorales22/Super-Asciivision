@@ -3,6 +3,8 @@ import { Files, Globe } from "lucide-react";
 import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../store/appStore";
+import { useMusicStore } from "../../store/musicStore";
+import { useTerminalStore } from "../../store/terminalStore";
 import type { AppPage, OverlayClip, SubtitleClip } from "../../types";
 import { clamp } from "../../utils/formatting";
 import { createEditorClip } from "../../utils/editor";
@@ -45,7 +47,7 @@ interface DragState {
 export function GrokShell() {
   const settingsOpen = useAppStore((state) => state.settingsOpen);
   const toggleSettings = useAppStore((state) => state.toggleSettings);
-  const openBrowserPreviewInStore = useAppStore((state) => state.openBrowserPreview);
+  const openBrowserPreviewInStore = useTerminalStore((state) => state.openBrowserPreview);
   const [page, setPage] = useState<AppPage>("chat");
   const [uiZoom, setUiZoom] = useState(100);
   const [asciivisionActive, setAsciivisionActive] = useState(false);
@@ -166,8 +168,8 @@ export function GrokShell() {
   const clampedFooterHeight = terminalVisible && !asciivisionActive
     ? clamp(footerHeight, 150, Math.max(150, Math.floor(viewport.height * 0.42)))
     : 0;
-  const musicCurrentIndex = useAppStore((state) => state.musicCurrentIndex);
-  const musicTracks = useAppStore((state) => state.musicTracks);
+  const musicCurrentIndex = useMusicStore((state) => state.musicCurrentIndex);
+  const musicTracks = useMusicStore((state) => state.musicTracks);
   const showMusicMiniPlayer = musicCurrentIndex >= 0 && musicCurrentIndex < musicTracks.length && !asciivisionActive && !miniPlayerHidden;
   const chromeActions = useMemo<ShellChromeActions>(
     () => ({

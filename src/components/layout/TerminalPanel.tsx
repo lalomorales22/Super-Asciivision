@@ -2,13 +2,13 @@ import { FitAddon } from "@xterm/addon-fit";
 import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "xterm";
 import { api } from "../../lib/tauri";
-import { useAppStore } from "../../store/appStore";
+import { useTerminalStore } from "../../store/terminalStore";
 
 export function TerminalPanel() {
-  const terminalOutput = useAppStore((state) => state.terminalOutput);
-  const terminalSessionId = useAppStore((state) => state.terminalSessionId);
-  const writeTerminalData = useAppStore((state) => state.writeTerminalData);
-  const resizeTerminal = useAppStore((state) => state.resizeTerminal);
+  const terminalOutput = useTerminalStore((state) => state.terminalOutput);
+  const terminalSessionId = useTerminalStore((state) => state.terminalSessionId);
+  const writeTerminalData = useTerminalStore((state) => state.writeTerminalData);
+  const resizeTerminal = useTerminalStore((state) => state.resizeTerminal);
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);

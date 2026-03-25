@@ -6,28 +6,30 @@ import { EmptyPanel } from "../components/EmptyPanel";
 import { MessageBubble } from "../components/MessageBubble";
 import { ToolCallBlock } from "../components/ToolCallBlock";
 import { useAppStore } from "../store/appStore";
+import { useChatStore } from "../store/chatStore";
+import { useWorkspaceStore } from "../store/workspaceStore";
 import { estimateSelectedTokens } from "../utils/tokens";
 
 export function ChatPage() {
-  const conversation = useAppStore((state) => state.activeConversation);
-  const composer = useAppStore((state) => state.composer);
-  const sending = useAppStore((state) => state.sending);
+  const conversation = useChatStore((state) => state.activeConversation);
+  const composer = useChatStore((state) => state.composer);
+  const sending = useChatStore((state) => state.sending);
+  const setComposer = useChatStore((state) => state.setComposer);
+  const sendMessage = useChatStore((state) => state.sendMessage);
+  const sendAgentMessage = useChatStore((state) => state.sendAgentMessage);
+  const stopStream = useChatStore((state) => state.stopStream);
+  const agentMode = useChatStore((state) => state.agentMode);
+  const toggleAgentMode = useChatStore((state) => state.toggleAgentMode);
+  const agentToolCalls = useChatStore((state) => state.agentToolCalls);
   const selectedModel = useAppStore((state) => state.selectedModel);
   const models = useAppStore((state) => state.models);
   const providerStatuses = useAppStore((state) => state.providerStatuses);
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const workspaceItemsMap = useAppStore((state) => state.workspaceItems);
-  const workspaceSelection = useAppStore((state) => state.workspaceSelection);
   const selectedProvider = useAppStore((state) => state.selectedProvider);
   const setSelectedProvider = useAppStore((state) => state.setSelectedProvider);
   const selectModel = useAppStore((state) => state.selectModel);
-  const setComposer = useAppStore((state) => state.setComposer);
-  const sendMessage = useAppStore((state) => state.sendMessage);
-  const sendAgentMessage = useAppStore((state) => state.sendAgentMessage);
-  const stopStream = useAppStore((state) => state.stopStream);
-  const agentMode = useAppStore((state) => state.agentMode);
-  const toggleAgentMode = useAppStore((state) => state.toggleAgentMode);
-  const agentToolCalls = useAppStore((state) => state.agentToolCalls);
+  const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId);
+  const workspaceItemsMap = useWorkspaceStore((state) => state.workspaceItems);
+  const workspaceSelection = useWorkspaceStore((state) => state.workspaceSelection);
 
   const workspaceItems = activeWorkspaceId ? workspaceItemsMap[activeWorkspaceId] ?? [] : [];
   const selectedWorkspaceItems = useMemo(

@@ -5,15 +5,15 @@ import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Terminal as XTerm } from "xterm";
 import { api } from "../lib/tauri";
-import { useAppStore } from "../store/appStore";
+import { useTileStore } from "../store/tileStore";
 
 type TileLayout = 2 | 4 | 9;
 
 export function TilesPage() {
-  const layout = useAppStore((state) => state.tileLayout);
-  const setLayout = useAppStore((state) => state.setTileLayout);
-  const sessions = useAppStore((state) => state.tileSessionIds);
-  const setSessions = useAppStore((state) => state.setTileSessionIds);
+  const layout = useTileStore((state) => state.tileLayout);
+  const setLayout = useTileStore((state) => state.setTileLayout);
+  const sessions = useTileStore((state) => state.tileSessionIds);
+  const setSessions = useTileStore((state) => state.setTileSessionIds);
 
   // Spawn new terminals only when the layout needs more than we currently have.
   // Never kill terminals on downsize — they stay alive in the background so the
@@ -23,7 +23,7 @@ export function TilesPage() {
   useEffect(() => {
     let cancelled = false;
 
-    const allSessions = useAppStore.getState().tileSessionIds;
+    const allSessions = useTileStore.getState().tileSessionIds;
 
     if (allSessions.length < layout) {
       const needed = layout - allSessions.length;
@@ -35,7 +35,7 @@ export function TilesPage() {
           for (const h of handles) void api.killTerminal(h.sessionId);
           return;
         }
-        const latest = useAppStore.getState().tileSessionIds;
+        const latest = useTileStore.getState().tileSessionIds;
         setSessions([...latest, ...handles.map((h) => h.sessionId)]);
       };
       void spawnBatch();

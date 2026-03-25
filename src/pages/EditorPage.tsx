@@ -25,7 +25,7 @@ import {
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ShellChromeContext } from "../components/ShellChromeContext";
 import { api } from "../lib/tauri";
-import { useAppStore } from "../store/appStore";
+import { useMediaStore } from "../store/mediaStore";
 import type { MediaAsset, SubtitleClip, OverlayClip } from "../types";
 import { isEditableTarget } from "../utils/dom";
 import { buildClipTrimPatch, buildTimelineTrack, createEditorClip, findClipAtTime, getEditorClipDuration, getEditorClipSpeed } from "../utils/editor";
@@ -82,12 +82,12 @@ export function EditorPage({
   clipboardRef: React.MutableRefObject<EditorClip | null>;
 }) {
   const chrome = useContext(ShellChromeContext);
-  const mediaCategories = useAppStore((state) => state.mediaCategories);
-  const selectedMediaCategoryId = useAppStore((state) => state.selectedMediaCategoryId);
-  const exportingEditor = useAppStore((state) => state.exportingEditor);
-  const exportEditorTimeline = useAppStore((state) => state.exportEditorTimeline);
-  const importLocalMediaAsset = useAppStore((state) => state.importLocalMediaAsset);
-  const ensureMediaLoaded = useAppStore((state) => state.ensureMediaLoaded);
+  const mediaCategories = useMediaStore((state) => state.mediaCategories);
+  const selectedMediaCategoryId = useMediaStore((state) => state.selectedMediaCategoryId);
+  const exportingEditor = useMediaStore((state) => state.exportingEditor);
+  const exportEditorTimeline = useMediaStore((state) => state.exportEditorTimeline);
+  const importLocalMediaAsset = useMediaStore((state) => state.importLocalMediaAsset);
+  const ensureMediaLoaded = useMediaStore((state) => state.ensureMediaLoaded);
   const [exportTitle, setExportTitle] = useState("Editor Export");
   const [exportCategoryId, setExportCategoryId] = useState<string>(selectedMediaCategoryId ?? "");
   const [importing, setImporting] = useState(false);

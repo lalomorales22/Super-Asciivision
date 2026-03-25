@@ -25,6 +25,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, events } from "../lib/tauri";
 import { useAppStore } from "../store/appStore";
+import { useTerminalStore } from "../store/terminalStore";
+import { useWorkspaceStore } from "../store/workspaceStore";
 import type { StreamEvent } from "../types";
 import { CHAT_MODELS } from "../constants";
 import { clamp, formatFileSize } from "../utils/formatting";
@@ -149,14 +151,14 @@ function IdeCodeEditor({
 export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const chrome = useContext(ShellChromeContext);
   const settings = useAppStore((state) => state.settings);
-  const workspaces = useAppStore((state) => state.workspaces);
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const workspaceItemsMap = useAppStore((state) => state.workspaceItems);
-  const scanningWorkspaceId = useAppStore((state) => state.scanningWorkspaceId);
-  const selectWorkspace = useAppStore((state) => state.selectWorkspace);
-  const scanWorkspace = useAppStore((state) => state.scanWorkspace);
-  const createWorkspaceFromFolder = useAppStore((state) => state.createWorkspaceFromFolder);
-  const deleteWorkspace = useAppStore((state) => state.deleteWorkspace);
+  const workspaces = useWorkspaceStore((state) => state.workspaces);
+  const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId);
+  const workspaceItemsMap = useWorkspaceStore((state) => state.workspaceItems);
+  const scanningWorkspaceId = useWorkspaceStore((state) => state.scanningWorkspaceId);
+  const selectWorkspace = useWorkspaceStore((state) => state.selectWorkspace);
+  const scanWorkspace = useWorkspaceStore((state) => state.scanWorkspace);
+  const createWorkspaceFromFolder = useWorkspaceStore((state) => state.createWorkspaceFromFolder);
+  const deleteWorkspace = useWorkspaceStore((state) => state.deleteWorkspace);
   const [leftMode, setLeftMode] = useState<"explorer" | "workspace">("explorer");
   const [query, setQuery] = useState("");
   const [activeFilePath, setActiveFilePath] = useState<string>();
@@ -553,7 +555,7 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     await refreshWorkspaceAfterMutation(activeWorkspaceId, nextActivePath);
   };
 
-  const writeTerminalData = useAppStore((state) => state.writeTerminalData);
+  const writeTerminalData = useTerminalStore((state) => state.writeTerminalData);
 
   const handleOpenInTerminal = async (node: IdeTreeNode) => {
     if (node.kind !== "folder") {

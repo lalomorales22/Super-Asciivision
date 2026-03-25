@@ -5,24 +5,25 @@ import { AudioLines, Files, ImagePlus, Plus, RefreshCcw, Trash2, X } from "lucid
 import { useContext, useEffect, useState } from "react";
 import { ShellChromeContext } from "../ShellChromeContext";
 import { api } from "../../lib/tauri";
-import { useAppStore } from "../../store/appStore";
+import { useMediaStore } from "../../store/mediaStore";
+import { useWorkspaceStore } from "../../store/workspaceStore";
 import type { AppPage, WorkspaceItem, WorkspaceMediaFile } from "../../types";
 import { EmptyPanel } from "../EmptyPanel";
 import { leafName } from "../../utils/paths";
 
 export function WorkspaceDrawer({ page }: { page: AppPage }) {
   const chrome = useContext(ShellChromeContext);
-  const workspaces = useAppStore((state) => state.workspaces);
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const workspaceItemsMap = useAppStore((state) => state.workspaceItems);
-  const workspaceSelection = useAppStore((state) => state.workspaceSelection);
-  const scanningWorkspaceId = useAppStore((state) => state.scanningWorkspaceId);
-  const addFilesToWorkspace = useAppStore((state) => state.addFilesToWorkspace);
-  const removeWorkspaceFile = useAppStore((state) => state.removeWorkspaceFile);
-  const deleteWorkspace = useAppStore((state) => state.deleteWorkspace);
-  const scanWorkspace = useAppStore((state) => state.scanWorkspace);
-  const toggleWorkspaceItem = useAppStore((state) => state.toggleWorkspaceItem);
-  const importLocalMediaAsset = useAppStore((state) => state.importLocalMediaAsset);
+  const workspaces = useWorkspaceStore((state) => state.workspaces);
+  const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId);
+  const workspaceItemsMap = useWorkspaceStore((state) => state.workspaceItems);
+  const workspaceSelection = useWorkspaceStore((state) => state.workspaceSelection);
+  const scanningWorkspaceId = useWorkspaceStore((state) => state.scanningWorkspaceId);
+  const addFilesToWorkspace = useWorkspaceStore((state) => state.addFilesToWorkspace);
+  const removeWorkspaceFile = useWorkspaceStore((state) => state.removeWorkspaceFile);
+  const deleteWorkspace = useWorkspaceStore((state) => state.deleteWorkspace);
+  const scanWorkspace = useWorkspaceStore((state) => state.scanWorkspace);
+  const toggleWorkspaceItem = useWorkspaceStore((state) => state.toggleWorkspaceItem);
+  const importLocalMediaAsset = useMediaStore((state) => state.importLocalMediaAsset);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
   const workspaceItems = activeWorkspaceId ? workspaceItemsMap[activeWorkspaceId] ?? [] : [];
   const [, setWorkspaceMedia] = useState<WorkspaceMediaFile[]>([]);

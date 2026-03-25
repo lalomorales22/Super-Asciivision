@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { MessageSquarePlus, Pencil, Pin, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { useAppStore } from "../../store/appStore";
+import { useChatStore } from "../../store/chatStore";
 import { EmptyPanel } from "../EmptyPanel";
 
 interface ConversationContextMenuState {
@@ -21,13 +21,13 @@ interface ConversationRenameState {
 }
 
 export function HistoryRail() {
-  const conversations = useAppStore((state) => state.conversations);
-  const activeConversationId = useAppStore((state) => state.activeConversation?.conversation.id);
-  const createConversation = useAppStore((state) => state.createConversation);
-  const loadConversation = useAppStore((state) => state.loadConversation);
-  const renameConversation = useAppStore((state) => state.renameConversation);
-  const toggleConversationPin = useAppStore((state) => state.toggleConversationPin);
-  const deleteConversation = useAppStore((state) => state.deleteConversation);
+  const conversations = useChatStore((state) => state.conversations);
+  const activeConversationId = useChatStore((state) => state.activeConversation?.conversation.id);
+  const createConversation = useChatStore((state) => state.createConversation);
+  const loadConversation = useChatStore((state) => state.loadConversation);
+  const renameConversation = useChatStore((state) => state.renameConversation);
+  const toggleConversationPin = useChatStore((state) => state.toggleConversationPin);
+  const deleteConversation = useChatStore((state) => state.deleteConversation);
   const [contextMenu, setContextMenu] = useState<ConversationContextMenuState>();
   const [renameDialog, setRenameDialog] = useState<ConversationRenameState>();
   const [renameDraft, setRenameDraft] = useState("");

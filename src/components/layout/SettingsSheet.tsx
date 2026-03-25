@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../../lib/tauri";
 import { useAppStore } from "../../store/appStore";
+import { useMediaStore } from "../../store/mediaStore";
 import type { Settings } from "../../types";
 import { CHAT_MODELS, IMAGE_MODELS, VIDEO_MODELS, XAI_VOICE_OPTIONS } from "../../constants";
 import { normalizeVoiceId } from "../../utils/audio";
@@ -317,7 +318,7 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
             type="button"
             onClick={async () => {
               await api.clearAllMedia();
-              useAppStore.setState({ mediaAssets: [], mediaCategories: [], mediaLoaded: false });
+              useMediaStore.setState({ mediaAssets: [], mediaCategories: [], mediaLoaded: false });
             }}
             className="rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[11px] text-stone-400 transition hover:bg-rose-500/15 hover:text-rose-200"
           >

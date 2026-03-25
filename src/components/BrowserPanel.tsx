@@ -1,12 +1,12 @@
-import { useAppStore } from "../store/appStore";
+import { useTerminalStore } from "../store/terminalStore";
 
 export function BrowserPanel() {
-  const browserUrl = useAppStore((state) => state.browserUrl);
-  const browserDraftUrl = useAppStore((state) => state.browserDraftUrl);
-  const browserPreviewHtml = useAppStore((state) => state.browserPreviewHtml);
-  const detectedServerUrl = useAppStore((state) => state.detectedServerUrl);
-  const setBrowserDraftUrl = useAppStore((state) => state.setBrowserDraftUrl);
-  const openBrowserUrl = useAppStore((state) => state.openBrowserUrl);
+  const browserUrl = useTerminalStore((state) => state.browserUrl);
+  const browserDraftUrl = useTerminalStore((state) => state.browserDraftUrl);
+  const browserPreviewHtml = useTerminalStore((state) => state.browserPreviewHtml);
+  const detectedServerUrl = useTerminalStore((state) => state.detectedServerUrl);
+  const setBrowserDraftUrl = useTerminalStore((state) => state.setBrowserDraftUrl);
+  const openBrowserUrl = useTerminalStore((state) => state.openBrowserUrl);
 
   return (
     <div className="flex h-full min-h-0 flex-col">

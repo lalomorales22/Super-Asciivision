@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../store/appStore";
+import { useMediaStore } from "../store/mediaStore";
 import {
   REALTIME_AUDIO_RATE,
   XAI_VOICE_OPTIONS,
@@ -26,18 +27,18 @@ import { MediaAssetCard } from "../pages/ImaginePage";
 
 export function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const settings = useAppStore((state) => state.settings);
-  const mediaCategories = useAppStore((state) => state.mediaCategories);
-  const mediaAssets = useAppStore((state) => state.mediaAssets);
-  const createMediaCategory = useAppStore((state) => state.createMediaCategory);
-  const renameMediaCategory = useAppStore((state) => state.renameMediaCategory);
-  const deleteMediaCategory = useAppStore((state) => state.deleteMediaCategory);
-  const generatingSpeech = useAppStore((state) => state.generatingSpeech);
-  const createRealtimeSession = useAppStore((state) => state.createRealtimeSession);
-  const clearRealtimeSession = useAppStore((state) => state.clearRealtimeSession);
-  const generatingRealtimeSession = useAppStore((state) => state.creatingRealtimeSession);
-  const realtimeSession = useAppStore((state) => state.realtimeSession);
-  const generateSpeech = useAppStore((state) => state.generateSpeech);
-  const ensureMediaLoaded = useAppStore((state) => state.ensureMediaLoaded);
+  const mediaCategories = useMediaStore((state) => state.mediaCategories);
+  const mediaAssets = useMediaStore((state) => state.mediaAssets);
+  const createMediaCategory = useMediaStore((state) => state.createMediaCategory);
+  const renameMediaCategory = useMediaStore((state) => state.renameMediaCategory);
+  const deleteMediaCategory = useMediaStore((state) => state.deleteMediaCategory);
+  const generatingSpeech = useMediaStore((state) => state.generatingSpeech);
+  const createRealtimeSession = useMediaStore((state) => state.createRealtimeSession);
+  const clearRealtimeSession = useMediaStore((state) => state.clearRealtimeSession);
+  const generatingRealtimeSession = useMediaStore((state) => state.creatingRealtimeSession);
+  const realtimeSession = useMediaStore((state) => state.realtimeSession);
+  const generateSpeech = useMediaStore((state) => state.generateSpeech);
+  const ensureMediaLoaded = useMediaStore((state) => state.ensureMediaLoaded);
   const [mode, setMode] = useState<"speech" | "realtime">("speech");
   const [speechError, setSpeechError] = useState<string>();
 
@@ -203,7 +204,7 @@ export function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void })
 
     try {
       await createRealtimeSession(realtimeModel, normalizeVoiceId(voiceName), realtimeInstructions);
-      const session = useAppStore.getState().realtimeSession ?? realtimeSession;
+      const session = useMediaStore.getState().realtimeSession ?? realtimeSession;
       if (!session) {
         throw new Error("Realtime session was not created.");
       }
