@@ -26,33 +26,12 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "r
 import { ShellChromeContext } from "../components/ShellChromeContext";
 import { api } from "../lib/tauri";
 import { useAppStore } from "../store/appStore";
-import type { MediaAsset } from "../types";
+import type { MediaAsset, SubtitleClip, OverlayClip } from "../types";
 import { isEditableTarget } from "../utils/dom";
 import { buildClipTrimPatch, buildTimelineTrack, createEditorClip, findClipAtTime, getEditorClipDuration, getEditorClipSpeed } from "../utils/editor";
 import type { EditorClip, TimelineTrackItem } from "../utils/editor";
 import { formatEditableDuration, formatTimelineSeconds, parseSecondsInput } from "../utils/formatting";
 
-export interface SubtitleClip {
-  id: string;
-  text: string;
-  start: number;
-  end: number;
-  x: number; // percentage 0-100
-  y: number; // percentage 0-100
-  fontSize: number; // pixels
-}
-
-export interface OverlayClip {
-  id: string;
-  assetId: string;
-  filePath: string;
-  start: number;
-  end: number;
-  x: number; // percentage 0-100
-  y: number; // percentage 0-100
-  width: number; // percentage 0-100
-  height: number; // percentage 0-100
-}
 
 export interface EditorContextMenu {
   clipId: string;

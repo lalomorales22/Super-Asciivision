@@ -395,3 +395,29 @@ export interface AgentEvent {
   iterations?: number | null;
   error?: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Editor clip overlay types (shared between App shell and EditorPage)
+// ---------------------------------------------------------------------------
+
+export interface SubtitleClip {
+  id: string;
+  text: string;
+  start: number;
+  end: number;
+  x: number; // percentage 0-100
+  y: number; // percentage 0-100
+  fontSize: number; // pixels
+}
+
+export interface OverlayClip {
+  id: string;
+  assetId: string;
+  filePath: string;
+  start: number;
+  end: number;
+  x: number; // percentage 0-100
+  y: number; // percentage 0-100
+  width: number; // percentage 0-100
+  height: number; // percentage 0-100
+}

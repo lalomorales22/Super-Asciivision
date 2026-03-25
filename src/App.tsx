@@ -49,7 +49,7 @@ import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } fro
 import { Terminal as XTerm } from "xterm";
 import { api } from "./lib/tauri";
 import { useAppStore } from "./store/appStore";
-import type { AppPage, Settings, WorkspaceItem, WorkspaceMediaFile } from "./types";
+import type { AppPage, OverlayClip, Settings, SubtitleClip, WorkspaceItem, WorkspaceMediaFile } from "./types";
 import { CHAT_MODELS, IMAGE_MODELS, VIDEO_MODELS, XAI_VOICE_OPTIONS } from "./constants";
 import { clamp, formatDuration } from "./utils/formatting";
 import { leafName } from "./utils/paths";
@@ -107,27 +107,6 @@ interface DragState {
   startValue: number;
 }
 
-interface SubtitleClip {
-  id: string;
-  text: string;
-  start: number;
-  end: number;
-  x: number; // percentage 0-100
-  y: number; // percentage 0-100
-  fontSize: number; // pixels
-}
-
-interface OverlayClip {
-  id: string;
-  assetId: string;
-  filePath: string;
-  start: number;
-  end: number;
-  x: number; // percentage 0-100
-  y: number; // percentage 0-100
-  width: number; // percentage 0-100
-  height: number; // percentage 0-100
-}
 
 interface ConversationContextMenuState {
   conversation: {
