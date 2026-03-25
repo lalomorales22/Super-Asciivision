@@ -9,6 +9,7 @@ import { createEditorClip } from "../../utils/editor";
 import type { EditorClip } from "../../utils/editor";
 import { isEditableTarget } from "../../utils/dom";
 import { BrowserPanel } from "../BrowserPanel";
+import { ErrorBoundary } from "../ErrorBoundary";
 import { ResizeHandle } from "../ResizeHandle";
 import { ShellChromeContext } from "../ShellChromeContext";
 import type { ShellChromeActions } from "../ShellChromeContext";
@@ -456,11 +457,13 @@ function CenterStage({
     content = <ChatPage />;
   }
   return (
-    <Suspense fallback={<PageFallback />}>
-      <div key={page} className="flex h-full min-h-0 flex-col overflow-hidden [animation:page-swap_220ms_ease-out]">
-        {content}
-      </div>
-    </Suspense>
+    <ErrorBoundary>
+      <Suspense fallback={<PageFallback />}>
+        <div key={page} className="flex h-full min-h-0 flex-col overflow-hidden [animation:page-swap_220ms_ease-out]">
+          {content}
+        </div>
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 
