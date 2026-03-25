@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { Files, Globe } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAppStore } from "../../store/appStore";
 import type { AppPage, OverlayClip, SubtitleClip } from "../../types";
@@ -12,14 +12,16 @@ import { BrowserPanel } from "../BrowserPanel";
 import { ResizeHandle } from "../ResizeHandle";
 import { ShellChromeContext } from "../ShellChromeContext";
 import type { ShellChromeActions } from "../ShellChromeContext";
-import { ChatPage } from "../../pages/ChatPage";
-import { EditorPage } from "../../pages/EditorPage";
-import { HandsPage } from "../../pages/HandsPage";
-import { IdePage } from "../../pages/IdePage";
-import { ImaginePage } from "../../pages/ImaginePage";
-import { MusicPage } from "../../pages/MusicPage";
-import { TilesPage } from "../../pages/TilesPage";
-import { VoiceAudioPage } from "../../pages/VoiceAudioPage";
+
+// Lazy-loaded page components — defers ~440KB from initial load
+const ChatPage = React.lazy(() => import("../../pages/ChatPage").then((m) => ({ default: m.ChatPage })));
+const EditorPage = React.lazy(() => import("../../pages/EditorPage").then((m) => ({ default: m.EditorPage })));
+const HandsPage = React.lazy(() => import("../../pages/HandsPage").then((m) => ({ default: m.HandsPage })));
+const IdePage = React.lazy(() => import("../../pages/IdePage").then((m) => ({ default: m.IdePage })));
+const ImaginePage = React.lazy(() => import("../../pages/ImaginePage").then((m) => ({ default: m.ImaginePage })));
+const MusicPage = React.lazy(() => import("../../pages/MusicPage").then((m) => ({ default: m.MusicPage })));
+const TilesPage = React.lazy(() => import("../../pages/TilesPage").then((m) => ({ default: m.TilesPage })));
+const VoiceAudioPage = React.lazy(() => import("../../pages/VoiceAudioPage").then((m) => ({ default: m.VoiceAudioPage })));
 import { AsciiVisionPanel } from "./AsciiVisionPanel";
 import { HistoryRail } from "./HistoryRail";
 import { MusicMiniPlayer } from "./MusicMiniPlayer";
@@ -358,6 +360,14 @@ export function GrokShell() {
   );
 }
 
+function PageFallback() {
+  return (
+    <div className="flex h-full items-center justify-center">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-400/20 border-t-emerald-400" />
+    </div>
+  );
+}
+
 function CenterStage({
   page,
   onNavigate,
@@ -446,9 +456,11 @@ function CenterStage({
     content = <ChatPage />;
   }
   return (
-    <div key={page} className="flex h-full min-h-0 flex-col overflow-hidden [animation:page-swap_220ms_ease-out]">
-      {content}
-    </div>
+    <Suspense fallback={<PageFallback />}>
+      <div key={page} className="flex h-full min-h-0 flex-col overflow-hidden [animation:page-swap_220ms_ease-out]">
+        {content}
+      </div>
+    </Suspense>
   );
 }
 
