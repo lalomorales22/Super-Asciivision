@@ -28,7 +28,7 @@ export function buildAssetPreviewDocument(asset: MediaAsset, src: string) {
   const scrollbar =
     "html{scrollbar-color:rgba(132,160,155,0.48) #050607;}::-webkit-scrollbar{width:12px;height:12px;background:#050607;}::-webkit-scrollbar-thumb{border-radius:999px;background:linear-gradient(180deg,rgba(132,160,155,0.55),rgba(125,211,252,0.4));border:2px solid #050607;}::-webkit-scrollbar-corner{background:#050607;}";
   const fitStyle =
-    "display:block;width:auto;height:auto;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);object-fit:contain;margin:auto;";
+    "display:block;width:auto;height:auto;max-width:calc(100% - 24px);max-height:calc(100vh - 24px);object-fit:contain;margin:auto;";
   if (asset.kind === "image") {
     return `<!doctype html><html><head><style>${scrollbar}</style></head><body style="${shell}display:grid;place-items:center;padding:12px;overflow:auto;"><img src="${src}" style="${fitStyle}" /></body></html>`;
   }

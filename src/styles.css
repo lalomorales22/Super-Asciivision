@@ -18,8 +18,20 @@ body,
 #root {
   min-height: 100%;
   height: 100%;
+  max-width: 100vw;
   border-radius: 34px;
   overflow: hidden;
+}
+
+/* Linux scrollbars consume layout space unlike macOS overlay scrollbars.
+   Use overlay when supported so the layout stays consistent cross-platform. */
+html {
+  overflow: overlay;
+  scrollbar-gutter: stable;
+}
+
+* {
+  scrollbar-width: thin;
 }
 
 html,

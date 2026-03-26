@@ -162,7 +162,7 @@ export function GrokShell() {
   return (
     <ShellChromeContext.Provider value={chromeActions}>
       <main
-        className="h-[calc(100vh-8px)] w-full bg-transparent p-1"
+        className="h-[calc(100vh-8px)] w-[calc(100vw-0px)] max-w-full bg-transparent p-1 overflow-hidden"
         style={uiZoom !== 100 ? { zoom: `${uiZoom}%` } : undefined}
       >
         <div

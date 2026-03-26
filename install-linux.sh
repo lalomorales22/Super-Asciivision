@@ -16,6 +16,7 @@ set -euo pipefail
 APP_NAME="Super ASCIIVision"
 BUNDLE_DIR="src-tauri/target/release/bundle"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 info()  { printf '\033[1;36m▸ %s\033[0m\n' "$*"; }
 ok()    { printf '\033[1;32m✔ %s\033[0m\n' "$*"; }
@@ -212,6 +213,34 @@ if [[ -n "$APPIMAGE_FILE" ]]; then
   ok "AppImage installed to $INSTALL_DIR/SuperASCIIVision.AppImage"
 fi
 
+# ── Desktop entry & icon (needed for Omarchy/Hyprland and other launchers) ──
+DESKTOP_DIR="$HOME/.local/share/applications"
+ICON_DIR="$HOME/.local/share/icons/hicolor/128x128/apps"
+ICON_SRC="$SCRIPT_DIR/src-tauri/icons/128x128.png"
+
+mkdir -p "$DESKTOP_DIR" "$ICON_DIR"
+
+if [[ -f "$ICON_SRC" ]]; then
+  cp "$ICON_SRC" "$ICON_DIR/super-asciivision.png"
+  ok "Icon installed"
+fi
+
+cat > "$DESKTOP_DIR/super-asciivision.desktop" <<DESKTOP
+[Desktop Entry]
+Name=Super ASCIIVision
+Comment=ASCII art video player and AI chat
+Exec=$INSTALL_DIR/super-asciivision
+Icon=super-asciivision
+Terminal=false
+Type=Application
+Categories=AudioVideo;Multimedia;
+StartupWMClass=super-asciivision
+DESKTOP
+
+chmod +x "$DESKTOP_DIR/super-asciivision.desktop"
+update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+ok "Desktop entry installed — app will appear in your launcher"
+
 # Ensure INSTALL_DIR is in PATH
 if [[ ":${PATH}:" != *":${INSTALL_DIR}:"* ]]; then
   SHELL_RC=""
@@ -234,6 +263,7 @@ echo ""
 ok "Done! Super ASCIIVision is installed."
 echo ""
 echo "   Launch the app:"
+echo "     Search 'Super ASCIIVision' in your app launcher (Walker, Rofi, etc.)"
 echo "     super-asciivision          (if ~/.local/bin is in PATH)"
 echo "     $INSTALL_DIR/super-asciivision"
 echo ""
