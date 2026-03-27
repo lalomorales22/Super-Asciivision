@@ -1,6 +1,6 @@
 [package]
 name = "super-asciivision"
-version = "0.1.2"
+version = "0.1.4"
 description = "Super ASCIIVision — unified AI desktop app"
 license = "MIT"
 authors = ["megabrain2"]

@@ -228,7 +228,7 @@ Open **Settings** in the app and add your API keys for Claude, OpenAI, and Gemin
 │  │ (inline terminal) │                                 │
 │  └──────────────────┘                                  │
 │                                                       │
-│  ASCIIVision Core (Rust/ratatui, 18 files, ~11K)      │
+│  ASCIIVision Core (Rust/ratatui, 18 files, ~11.6K)    │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -338,7 +338,7 @@ cargo test --manifest-path src-tauri/Cargo.toml     # Backend tests
 │   ├── utils/                  # 8 pure function libraries (with unit tests)
 │   ├── hooks/                  # Custom hooks (useDragResize, etc.)
 │   └── lib/tauri.ts            # IPC bridge to Rust backend
-├── src-tauri/                  # Rust backend (14 source files, ~10.2K lines)
+├── src-tauri/                  # Rust backend (15 source files, ~10.3K lines)
 │   ├── src/lib.rs              # Tauri commands — chat, media, terminal, music
 │   ├── src/agent.rs            # Agentic tool-use loop
 │   ├── src/terminal.rs         # PTY session management
@@ -347,11 +347,10 @@ cargo test --manifest-path src-tauri/Cargo.toml     # Backend tests
 │   ├── src/db.rs               # SQLite persistence
 │   ├── src/keychain.rs         # Keychain + file secret store with migration
 │   └── binaries/               # ASCIIVision sidecar (built by build-asciivision.sh)
-├── asciivision-core/           # ASCIIVision (Rust/ratatui, 18 files, ~11K lines)
-│   ├── demo-videos/            # Intro video and samples
-│   └── games/                  # Pac-Man, Space Invaders, 3D Penguin
+├── asciivision-core/           # ASCIIVision (Rust/ratatui, 18 files, ~11.6K lines)
+│   └── demo-videos/            # Intro video and samples
 ├── hands-relay/                # Standalone Node.js relay for mobile bridge
-├── docs/                       # Handoff documents and dev notes
+├── docs/                       # API docs site with Ollama AI assistant and one-click copy
 ├── build-asciivision.sh        # Builds ASCIIVision + copies to sidecar
 ├── install.sh                  # One-line macOS installer
 ├── install-linux.sh            # One-line Linux installer

@@ -1122,7 +1122,7 @@ mod tests {
             "hello",
             "complete",
             Some(ProviderId::Xai),
-            Some("grok-code-fast-1"),
+            Some("grok-4-1-fast-reasoning"),
         )
         .expect("insert message");
 

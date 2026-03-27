@@ -124,7 +124,7 @@ pub fn create_workspace_text_file(path: &str, content: &str) -> AppResult<()> {
         .parent()
         .ok_or_else(|| AppError::message("Unable to create a file at that location."))?;
     if !parent.is_dir() {
-        return Err(AppError::message("The target folder does not exist."));
+        fs::create_dir_all(parent)?;
     }
     if target.exists() {
         return Err(AppError::message("A file already exists with that name."));

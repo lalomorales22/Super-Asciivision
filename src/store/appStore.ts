@@ -51,7 +51,7 @@ const fallbackSettings: Settings = {
   hotkey: "CommandOrControl+Shift+Space",
   alwaysOnTop: false,
   defaultProvider: "xai",
-  xaiModel: "grok-code-fast-1",
+  xaiModel: "grok-4-1-fast-reasoning",
   xaiImageModel: "grok-imagine-image",
   xaiVideoModel: "grok-imagine-video",
   xaiTtsModel: "xai-tts",
@@ -71,7 +71,7 @@ function pickModel(models: ModelMap, provider: ProviderId = "xai", ollamaDefault
     }
     return models.ollama[0]?.modelId ?? "qwen3.5:2b";
   }
-  return models.xai[0]?.modelId ?? fallbackSettings.xaiModel ?? "grok-code-fast-1";
+  return models.xai[0]?.modelId ?? fallbackSettings.xaiModel ?? "grok-4-1-fast-reasoning";
 }
 
 
@@ -82,12 +82,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   providerStatuses: [],
   models: emptyModels,
   selectedProvider: "xai",
-  selectedModel: fallbackSettings.xaiModel ?? "grok-code-fast-1",
+  selectedModel: fallbackSettings.xaiModel ?? "grok-4-1-fast-reasoning",
   settingsOpen: false,
   initialize: async () => {
     try {
       if (!get().listenersReady) {
-        set({ listenersReady: true });
         await events.onStream((event: StreamEvent) => {
           useChatStore.getState().handleStreamEvent(event);
         });
@@ -153,7 +152,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         settings,
         providerStatuses,
         selectedProvider: "xai",
-        selectedModel: settings.xaiModel ?? fallbackSettings.xaiModel ?? "grok-code-fast-1",
+        selectedModel: settings.xaiModel ?? fallbackSettings.xaiModel ?? "grok-4-1-fast-reasoning",
         initialized: true,
         booting: false,
       });
@@ -192,10 +191,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     ]);
     const xaiModels = xaiResult.status === "fulfilled" ? xaiResult.value.filter((m) => m.providerId === "xai") : [];
     const ollamaModels = ollamaResult.status === "fulfilled" ? ollamaResult.value.filter((m) => m.providerId === "ollama") : [];
-    set((state) => ({
-      models: { xai: xaiModels, ollama: ollamaModels },
-      selectedModel: state.selectedModel ?? pickModel({ xai: xaiModels, ollama: ollamaModels }, state.selectedProvider, state.settings?.ollamaModel ?? undefined),
-    }));
+    const newModels = { xai: xaiModels, ollama: ollamaModels };
+    set((state) => {
+      const modelList = state.selectedProvider === "ollama" ? ollamaModels : xaiModels;
+      const currentValid = state.selectedModel && modelList.some((m) => m.modelId === state.selectedModel);
+      return {
+        models: newModels,
+        selectedModel: currentValid ? state.selectedModel : pickModel(newModels, state.selectedProvider, state.settings?.ollamaModel ?? undefined),
+      };
+    });
   },
 
   selectModel: (modelId) => set({ selectedModel: modelId }),

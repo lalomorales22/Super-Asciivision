@@ -546,7 +546,7 @@ impl HandsBridge {
             .clone()
             .filter(|value| !value.trim().is_empty())
             .or_else(|| settings.xai_model.clone())
-            .unwrap_or_else(|| "grok-code-fast-1".to_string());
+            .unwrap_or_else(|| "grok-4-1-fast-reasoning".to_string());
 
         self.append_chat_message("user", text, Some(&model_id)).await;
         self.log_activity(

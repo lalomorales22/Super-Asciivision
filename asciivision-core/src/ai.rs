@@ -99,7 +99,7 @@ impl AIProvider {
     fn model(&self) -> &'static str {
         match self {
             Self::Claude => "claude-haiku-4-5",
-            Self::Grok => "grok-4-fast-non-reasoning",
+            Self::Grok => "grok-4-1-fast-non-reasoning",
             Self::OpenAI => "gpt-5-nano",
             Self::Gemini => "gemini-3-flash-preview",
             Self::Ollama => "",

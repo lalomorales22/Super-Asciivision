@@ -26,7 +26,7 @@ vi.mock("./appStore", () => ({
   useAppStore: {
     getState: vi.fn().mockReturnValue({
       selectedProvider: "xai",
-      selectedModel: "grok-code-fast-1",
+      selectedModel: "grok-4-1-fast-reasoning",
     }),
     setState: vi.fn(),
   },

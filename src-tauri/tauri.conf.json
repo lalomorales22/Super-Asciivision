@@ -42,7 +42,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb"],
+    "targets": "all",
     "externalBin": [
       "binaries/asciivision"
     ],

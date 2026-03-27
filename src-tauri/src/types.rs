@@ -109,7 +109,7 @@ impl Default for Settings {
             hotkey: "CommandOrControl+Shift+Space".into(),
             always_on_top: false,
             default_provider: ProviderId::Xai,
-            xai_model: Some("grok-code-fast-1".into()),
+            xai_model: Some("grok-4-1-fast-reasoning".into()),
             xai_image_model: Some("grok-imagine-image".into()),
             xai_video_model: Some("grok-imagine-video".into()),
             xai_tts_model: Some("xai-tts".into()),

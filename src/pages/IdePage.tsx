@@ -177,13 +177,14 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   const [ideRightMode, setIdeRightMode] = useState<"assistant" | "browser">("assistant");
   const models = useAppStore((state) => state.models);
   const [assistantProvider, setAssistantProvider] = useState<"xai" | "ollama">("xai");
-  const [assistantModel, setAssistantModel] = useState(settings?.xaiModel ?? "grok-code-fast-1");
+  const [assistantModel, setAssistantModel] = useState(settings?.xaiModel ?? "grok-4-1-fast-reasoning");
   const [assistantComposer, setAssistantComposer] = useState("");
   const [assistantConversationId, setAssistantConversationId] = useState<string>();
   const [assistantSending, setAssistantSending] = useState(false);
   const [assistantMessages, setAssistantMessages] = useState<
     Array<{ id: string; role: "user" | "assistant"; content: string; status: string }>
   >([]);
+  const assistantStreamRef = useRef<string | null>(null);
   const [contextMenu, setContextMenu] = useState<IdeContextMenuState>();
   const [ideLeftWidth, setIdeLeftWidth] = useState(240);
   const [ideRightWidth, setIdeRightWidth] = useState(340);
@@ -294,40 +295,58 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   }, [activeFilePath]);
 
   useEffect(() => {
+    // Guard against React Strict Mode double-registration: if the cleanup
+    // fires before the listen promise resolves, the first listener leaks
+    // and every delta is appended twice (garbling the output). We use a
+    // cancelled flag so the stale listener becomes a no-op.
+    let cancelled = false;
     let dispose: (() => void) | undefined;
     void events.onStream((event: StreamEvent) => {
-      setAssistantMessages((current) =>
-        current.map((message) => {
-          if (message.id !== event.messageId) {
-            return message;
+      if (cancelled) return;
+
+      setAssistantMessages((current) => {
+        const idx = current.findIndex(
+          (m) =>
+            m.id === event.messageId ||
+            (m.role === "assistant" &&
+              m.status === "streaming" &&
+              assistantStreamRef.current === event.messageId),
+        );
+        if (idx === -1) return current;
+
+        return current.map((message, i) => {
+          if (i !== idx) return message;
+          const m = message.id !== event.messageId ? { ...message, id: event.messageId } : message;
+          switch (event.kind) {
+            case "delta":
+              return { ...m, content: `${m.content}${event.textDelta ?? ""}`, status: "streaming" as const };
+            case "completed":
+              return { ...m, status: "complete" };
+            case "cancelled":
+              return { ...m, status: "cancelled" };
+            case "error":
+              return { ...m, status: "error", content: event.error ?? m.content };
+            default:
+              return m;
           }
-          if (event.kind === "delta") {
-            return {
-              ...message,
-              content: `${message.content}${event.textDelta ?? ""}`,
-              status: "streaming",
-            };
-          }
-          if (event.kind === "completed") {
-            return { ...message, status: "complete" };
-          }
-          if (event.kind === "cancelled") {
-            return { ...message, status: "cancelled" };
-          }
-          if (event.kind === "error") {
-            return { ...message, status: "error", content: event.error ?? message.content };
-          }
-          return message;
-        }),
-      );
+        });
+      });
       if (event.kind === "completed" || event.kind === "cancelled" || event.kind === "error") {
         setAssistantSending(false);
+        assistantStreamRef.current = null;
       }
     }).then((unlisten: () => void) => {
-      dispose = unlisten;
+      if (cancelled) {
+        unlisten();
+      } else {
+        dispose = unlisten;
+      }
     });
 
-    return () => dispose?.();
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -455,7 +474,12 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     }
 
     const nextPath = `${node.path.replace(/\/+$/, "")}/${nextName}`;
-    await api.createWorkspaceTextFile(nextPath, "");
+    try {
+      await api.createWorkspaceTextFile(nextPath, "");
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+      return;
+    }
     setOpenFolders((current) => ({ ...current, [node.id]: true }));
     setPreviewMode("code");
     setTabContents((prev) => ({ ...prev, [nextPath]: { content: "", saved: "" } }));
@@ -474,9 +498,14 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
       return;
     }
 
-    const nextPath = renamedPath(node.path, nextName);
-    await api.renameWorkspacePath(node.path, nextName);
+    try {
+      await api.renameWorkspacePath(node.path, nextName);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+      return;
+    }
 
+    const nextPath = renamedPath(node.path, nextName);
     const nextRoots = activeWorkspace.roots.includes(node.path)
       ? activeWorkspace.roots.map((root) => (root === node.path ? nextPath : root))
       : undefined;
@@ -562,12 +591,27 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
       window.alert("Open a workspace first.");
       return;
     }
-    const fileName = window.prompt("New file name", "new-file.ts")?.trim();
-    if (!fileName) return;
     const root = activeWorkspace.roots[0];
     if (!root) return;
-    const newPath = `${root.replace(/\/+$/, "")}/${fileName}`;
-    await api.createWorkspaceTextFile(newPath, code);
+
+    // Default to the directory of the currently open file, or workspace root
+    let defaultName = "new-file.ts";
+    if (activeFilePath) {
+      const dir = activeFilePath.substring(0, activeFilePath.lastIndexOf("/") + 1);
+      const relDir = dir.startsWith(root) ? dir.substring(root.replace(/\/+$/, "").length + 1) : "";
+      defaultName = relDir ? `${relDir}new-file.ts` : "new-file.ts";
+    }
+
+    const fileName = window.prompt("File path (relative to workspace root)", defaultName)?.trim();
+    if (!fileName) return;
+
+    const newPath = `${root.replace(/\/+$/, "")}/${fileName.replace(/^\/+/, "")}`;
+    try {
+      await api.createWorkspaceTextFile(newPath, code);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+      return;
+    }
     setTabContents((prev) => ({ ...prev, [newPath]: { content: code, saved: code } }));
     setOpenTabs((tabs) => (tabs.includes(newPath) ? tabs : [...tabs, newPath]));
     setActiveFilePath(newPath);
@@ -583,14 +627,29 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     if (!trimmed || assistantSending) {
       return;
     }
+
+    // Validate model — saved settings may reference a retired model
+    const effectiveModel =
+      assistantProvider === "xai" && !CHAT_MODELS.includes(assistantModel)
+        ? CHAT_MODELS[0] ?? "grok-4-1-fast-reasoning"
+        : assistantModel;
+    if (effectiveModel !== assistantModel) {
+      setAssistantModel(effectiveModel);
+    }
+
     setAssistantSending(true);
     let conversationId = assistantConversationId;
     if (!conversationId) {
-      const conversation = await api.createConversation({
-        title: activeItem ? `IDE • ${leafName(activeItem.path)}` : "IDE Assistant",
-      });
-      conversationId = conversation.id;
-      setAssistantConversationId(conversation.id);
+      try {
+        const conversation = await api.createConversation({
+          title: activeItem ? `IDE • ${leafName(activeItem.path)}` : "IDE Assistant",
+        });
+        conversationId = conversation.id;
+        setAssistantConversationId(conversation.id);
+      } catch (err) {
+        setAssistantSending(false);
+        return;
+      }
     }
 
     const systemParts = [
@@ -614,17 +673,41 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     ]);
     setAssistantComposer("");
 
-    const handle = await api.sendMessage({
-      conversationId,
-      providerId: assistantProvider,
-      modelId: assistantModel,
-      userText: prompt,
-      selectedWorkspaceItems: activeItem ? [activeItem.id] : [],
-    });
+    // Add placeholder assistant message BEFORE the API call so the stream
+    // listener always has a target to update — eliminates the race where
+    // fast error/delta events arrive before the message is in state.
+    const placeholderId = `pending-${Date.now()}`;
     setAssistantMessages((current) => [
       ...current,
-      { id: handle.messageId, role: "assistant", content: "", status: "streaming" },
+      { id: placeholderId, role: "assistant", content: "", status: "streaming" },
     ]);
+
+    try {
+      const handle = await api.sendMessage({
+        conversationId,
+        providerId: assistantProvider,
+        modelId: effectiveModel,
+        userText: prompt,
+        selectedWorkspaceItems: activeItem ? [activeItem.id] : [],
+      });
+      // Store the real messageId so the stream listener can match events
+      // that arrive before React reconciles the placeholder ID.
+      assistantStreamRef.current = handle.messageId;
+      setAssistantMessages((current) =>
+        current.map((msg) =>
+          msg.id === placeholderId ? { ...msg, id: handle.messageId } : msg,
+        ),
+      );
+    } catch (err) {
+      setAssistantMessages((current) =>
+        current.map((msg) =>
+          msg.id === placeholderId
+            ? { ...msg, status: "error", content: err instanceof Error ? err.message : String(err) }
+            : msg,
+        ),
+      );
+      setAssistantSending(false);
+    }
   };
 
   const renderTreeNode = (node: IdeTreeNode, depth = 0): React.ReactNode => {
@@ -1053,7 +1136,7 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                         type="button"
                         onClick={() => {
                           setAssistantProvider("xai");
-                          setAssistantModel(settings?.xaiModel ?? "grok-code-fast-1");
+                          setAssistantModel(settings?.xaiModel ?? "grok-4-1-fast-reasoning");
                         }}
                         className={clsx(
                           "rounded-lg border px-2 py-1 text-[9px] font-semibold transition",
@@ -1213,7 +1296,9 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
                                   h3({ children }) { return <h3 className="mt-2 mb-1 text-[11px] font-semibold text-stone-200">{children}</h3>; },
                                   strong({ children }) { return <strong className="font-semibold text-stone-100">{children}</strong>; },
                                 }}
-                              />
+                              >
+                                {message.content}
+                              </ReactMarkdown>
                             </div>
                           ) : message.status === "streaming" ? (
                             <TypingIndicator />

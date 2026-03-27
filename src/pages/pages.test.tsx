@@ -45,11 +45,11 @@ function mockStoreSelector(state: Record<string, unknown>) {
 }
 
 const appState = {
-  settings: { hotkey: "", alwaysOnTop: false, defaultProvider: "xai", xaiModel: "grok-code-fast-1" },
+  settings: { hotkey: "", alwaysOnTop: false, defaultProvider: "xai", xaiModel: "grok-4-1-fast-reasoning" },
   providerStatuses: [],
   models: { xai: [], ollama: [] },
   selectedProvider: "xai",
-  selectedModel: "grok-code-fast-1",
+  selectedModel: "grok-4-1-fast-reasoning",
   settingsOpen: false,
   toggleSettings: vi.fn(),
   selectModel: vi.fn(),

@@ -27,7 +27,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            model_id: "grok-code-fast-1".into(),
+            model_id: "grok-4-1-fast-reasoning".into(),
             system_prompt: String::new(),
             max_iterations: 25,
             workspace_roots: Vec::new(),

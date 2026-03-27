@@ -2102,7 +2102,13 @@ pub fn run() {
     let secrets: Arc<dyn SecretStore> = Arc::new(FileSecretStore::new(
         app_data_dir.join("secrets"),
     ));
-    let providers = ProviderService::new(reqwest::Client::new(), secrets);
+    let providers = ProviderService::new(
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("failed to build HTTP client"),
+        secrets,
+    );
     let initial_settings = database.load_settings().expect("settings load failed");
 
     tauri::Builder::default()

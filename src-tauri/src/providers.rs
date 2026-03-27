@@ -229,6 +229,7 @@ impl ProviderService {
         let mut request_body = serde_json::json!({
             "model": model_id,
             "stream": true,
+            "stream_options": { "include_usage": true },
             "messages": messages,
         });
         if let Some(max_tokens) = max_output_tokens {
@@ -240,15 +241,28 @@ impl ProviderService {
             _ => (XAI_CHAT_ENDPOINT, Some(self.require_api_key()?)),
         };
 
+        info!(
+            endpoint,
+            model = model_id,
+            provider = ?provider,
+            message_count = messages.len(),
+            "stream_chat: sending request"
+        );
+
         let mut req = self.client.post(endpoint).json(&request_body);
         if let Some(ref key) = api_key {
             req = req.bearer_auth(key);
         }
         let response = req.send().await?;
 
-        if !response.status().is_success() {
-            return Err(AppError::message(extract_error(response).await?));
+        let status = response.status();
+        if !status.is_success() {
+            let err = extract_error(response).await?;
+            error!(status = %status, error = %err, "stream_chat: API error");
+            return Err(AppError::message(err));
         }
+
+        info!("stream_chat: connected, reading SSE stream");
 
         let mut usage = TokenUsage {
             input_tokens: None,
@@ -256,15 +270,26 @@ impl ProviderService {
         };
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
+        let mut delta_count = 0usize;
+
+        // xAI docs: reasoning models may take minutes before the first
+        // token — use a generous per-chunk timeout (5 min).
+        let chunk_timeout = Duration::from_secs(300);
+
         loop {
             if cancel.is_cancelled() {
                 return Err(AppError::message("cancelled"));
             }
-            let maybe_chunk = tokio::time::timeout(Duration::from_secs(60), stream.next()).await;
+            let maybe_chunk = tokio::time::timeout(chunk_timeout, stream.next()).await;
             let chunk = match maybe_chunk {
                 Ok(Some(chunk)) => chunk?,
                 Ok(None) => break,
-                Err(_) => return Err(AppError::message("stream timed out after 60 seconds")),
+                Err(_) => {
+                    error!("stream_chat: timed out after 300s waiting for next chunk (got {delta_count} deltas so far)");
+                    return Err(AppError::message(
+                        "Stream timed out — the model may need more time. Try a shorter prompt or a fast model.",
+                    ));
+                }
             };
             buffer.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(event) = take_sse_event(&mut buffer) {
@@ -277,7 +302,15 @@ impl ProviderService {
                 if data.is_empty() || data == "[DONE]" {
                     continue;
                 }
-                let json: Value = serde_json::from_str(&data)?;
+                let json: Value = match serde_json::from_str(&data) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        error!("stream_chat: failed to parse SSE data: {err}\nraw: {data}");
+                        return Err(AppError::message(format!("Failed to parse streaming response: {err}")));
+                    }
+                };
+
+                // Extract text content from delta
                 if let Some(delta) = json
                     .get("choices")
                     .and_then(Value::as_array)
@@ -286,8 +319,12 @@ impl ProviderService {
                     .and_then(|delta| delta.get("content"))
                     .and_then(Value::as_str)
                 {
-                    on_delta(delta.to_string())?;
+                    if !delta.is_empty() {
+                        delta_count += 1;
+                        on_delta(delta.to_string())?;
+                    }
                 }
+
                 if let Some(usage_value) = json.get("usage") {
                     usage.input_tokens = usage_value
                         .get("prompt_tokens")
@@ -298,15 +335,24 @@ impl ProviderService {
                         .and_then(Value::as_u64)
                         .or_else(|| usage_value.get("output_tokens").and_then(Value::as_u64));
                 }
+
                 if let Some(message) = json
                     .get("error")
                     .and_then(|value| value.get("message"))
                     .and_then(Value::as_str)
                 {
+                    error!("stream_chat: API returned error in stream: {message}");
                     return Err(AppError::message(message));
                 }
             }
         }
+
+        info!(
+            delta_count,
+            input_tokens = ?usage.input_tokens,
+            output_tokens = ?usage.output_tokens,
+            "stream_chat: stream complete"
+        );
         Ok(usage)
     }
 
@@ -637,14 +683,10 @@ impl ProviderService {
 
 fn chat_models() -> Vec<ModelDescriptor> {
     [
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
         "grok-4-1-fast-reasoning",
         "grok-4-1-fast-non-reasoning",
-        "grok-code-fast-1",
-        "grok-4-fast-reasoning",
-        "grok-4-fast-non-reasoning",
-        "grok-4-0709",
-        "grok-3-mini",
-        "grok-3",
     ]
     .into_iter()
     .map(|model_id| ModelDescriptor {
