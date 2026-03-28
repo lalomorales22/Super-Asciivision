@@ -66,11 +66,11 @@ const SHORTCUT_SECTIONS = [
 function HelpOverlay({ onClose }: { onClose: () => void }) {
   return (
     <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-[24px] border border-cyan-400/20 bg-[linear-gradient(180deg,#0a0b0d,#070809)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.6)] [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.12)_transparent]">
+      <div className="w-full max-w-2xl rounded-[24px] border border-cyan-400/20 bg-[linear-gradient(180deg,#0a0b0d,#070809)] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.6)]">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-[10px] uppercase tracking-[0.35em] text-cyan-300/70">ASCIIVision</p>
-            <h3 className="mt-2 text-[16px] font-semibold text-stone-100">Keyboard Shortcuts & Commands</h3>
+            <h3 className="mt-1 text-[15px] font-semibold text-stone-100">Keyboard Shortcuts & Commands</h3>
           </div>
           <button
             type="button"
@@ -81,17 +81,17 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {SHORTCUT_SECTIONS.map((section) => (
-            <div key={section.title} className="rounded-[18px] border border-white/8 bg-white/[0.03] p-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-200/70">{section.title}</p>
-              <div className="mt-2.5 space-y-1.5">
+            <div key={section.title} className="rounded-[14px] border border-white/8 bg-white/[0.03] px-2.5 py-2">
+              <p className="text-[9px] font-semibold uppercase tracking-[0.24em] text-cyan-200/70">{section.title}</p>
+              <div className="mt-1.5 space-y-1">
                 {section.items.map(([key, desc]) => (
-                  <div key={key} className="flex items-start gap-2">
-                    <kbd className="shrink-0 rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 font-['IBM_Plex_Mono'] text-[9px] text-cyan-100">
+                  <div key={key} className="flex items-start gap-1.5">
+                    <kbd className="shrink-0 rounded-md border border-white/10 bg-white/[0.06] px-1 py-px font-['IBM_Plex_Mono'] text-[8px] text-cyan-100">
                       {key}
                     </kbd>
-                    <span className="text-[10px] leading-4 text-stone-400">{desc}</span>
+                    <span className="text-[9px] leading-[13px] text-stone-400">{desc}</span>
                   </div>
                 ))}
               </div>
@@ -99,8 +99,8 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
           ))}
         </div>
 
-        <p className="mt-4 text-center text-[9px] text-stone-600">
-          Type <kbd className="rounded border border-white/10 bg-white/[0.06] px-1 py-0.5 font-['IBM_Plex_Mono']">/help</kbd> in the terminal for the full command list
+        <p className="mt-2.5 text-center text-[9px] text-stone-600">
+          Press <kbd className="rounded border border-white/10 bg-white/[0.06] px-1 py-px font-['IBM_Plex_Mono'] text-[8px]">F1</kbd> for help &middot; <kbd className="rounded border border-white/10 bg-white/[0.06] px-1 py-px font-['IBM_Plex_Mono'] text-[8px]">/help</kbd> for full command list
         </p>
       </div>
     </div>

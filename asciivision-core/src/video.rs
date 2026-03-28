@@ -169,6 +169,46 @@ fn build_scaler(
     .context("create scaler")
 }
 
+/// Compute decode dimensions that preserve the video's aspect ratio while
+/// fitting within `(max_w, max_h)`.  Terminal characters are roughly 2× taller
+/// than they are wide, so we multiply the video's width ratio by a character
+/// aspect factor to keep the image from looking squished.
+fn fit_aspect(src_w: u32, src_h: u32, max_w: u16, max_h: u16) -> (u16, u16) {
+    if src_w == 0 || src_h == 0 || max_w == 0 || max_h == 0 {
+        return (max_w.max(1), max_h.max(1));
+    }
+
+    // Terminal character cells are ~2:1 (height:width).  One video pixel maps
+    // to one character, so a square video pixel looks tall on screen.  To
+    // correct for this, we treat each character column as worth 1 unit of
+    // width and each row as worth ~2 units of height.
+    let char_aspect: f64 = 2.0;
+    let src_ratio = src_w as f64 / src_h as f64; // e.g. 1.78 for 16:9
+    let effective_ratio = src_ratio * char_aspect; // e.g. 3.56
+
+    let max_w = max_w as f64;
+    let max_h = max_h as f64;
+
+    // Try fitting to width first
+    let (w, h) = {
+        let w = max_w;
+        let h = w / effective_ratio;
+        if h <= max_h {
+            (w, h)
+        } else {
+            // Fit to height instead
+            let h = max_h;
+            let w = h * effective_ratio;
+            (w, h)
+        }
+    };
+
+    (
+        (w.round() as u16).clamp(1, max_w as u16),
+        (h.round() as u16).clamp(1, max_h as u16),
+    )
+}
+
 fn spawn_decode(
     path: &Path,
     decode_size: (u16, u16),
@@ -176,12 +216,15 @@ fn spawn_decode(
 ) -> Result<Receiver<AsciiFrame>> {
     let path = path.to_path_buf();
     let (tx, rx) = bounded(8);
-    let (target_width, target_height) = decode_size;
+    let (max_width, max_height) = decode_size;
 
     std::thread::spawn(move || {
         let _result: Result<()> = (|| {
         let (mut input, video_index, mut decoder, (src_width, src_height), fps) =
             open_decoder(path.as_path())?;
+
+        // Compute aspect-ratio-preserving target dimensions
+        let (target_width, target_height) = fit_aspect(src_width, src_height, max_width, max_height);
 
         // Calculate frame duration from FPS (default 24fps if unknown)
         let frame_duration = fps
@@ -244,12 +287,18 @@ fn spawn_decode(
 fn render_ascii(buffer: &mut Buffer, area: Rect, ascii: &AsciiFrame, intensity: f32) {
     let content_width = min(ascii.width, area.width);
     let content_height = min(ascii.height, area.height);
+
+    // Center the visible portion in the display area
     let offset_x = area.x + (area.width - content_width) / 2;
     let offset_y = area.y + (area.height - content_height) / 2;
 
+    // Center the crop in the source frame (clip equally from both sides)
+    let src_x = (ascii.width.saturating_sub(content_width)) / 2;
+    let src_y = (ascii.height.saturating_sub(content_height)) / 2;
+
     for y in 0..content_height {
         for x in 0..content_width {
-            let index = y as usize * ascii.width as usize + x as usize;
+            let index = (src_y + y) as usize * ascii.width as usize + (src_x + x) as usize;
             let (glyph, r, g, b) = ascii.cells[index];
             let scanline = if y % 2 == 0 { 0.84 } else { 1.0 };
             let factor = (intensity * scanline).clamp(0.1, 1.2);

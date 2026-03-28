@@ -282,7 +282,7 @@ export function GrokShell() {
             </div>
           ) : null}
 
-          {terminalVisible && page !== "tiles" ? (
+          {terminalVisible && page !== "tiles" && !asciivisionActive ? (
             <>
               <div className="col-[1/-1]">
                 <ResizeHandle

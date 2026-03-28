@@ -275,14 +275,14 @@ pub struct TilingManager {
 
 impl TilingManager {
     pub fn new() -> Self {
-        let mut mgr = Self {
-            tree: TileNode::leaf(PanelKind::Transcript, 0),
+        // Start with a single Video panel so users see the demo on launch.
+        // Pressing F6 / /layout cycles to the full Default multi-panel layout.
+        Self {
+            tree: TileNode::leaf(PanelKind::Video, 0),
             focused: 0,
-            preset: LayoutPreset::Default,
-            next_id: 0,
-        };
-        mgr.apply_preset(LayoutPreset::Default);
-        mgr
+            preset: LayoutPreset::FullFocus,
+            next_id: 1,
+        }
     }
 
     pub fn apply_preset(&mut self, preset: LayoutPreset) {

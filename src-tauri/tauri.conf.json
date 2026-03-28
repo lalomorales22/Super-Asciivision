@@ -30,7 +30,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://api.x.ai wss://api.x.ai ws://127.0.0.1 http://localhost:11434 ipc: http://ipc.localhost; img-src 'self' data: blob: asset: https://asset.localhost; media-src 'self' data: blob: asset: https://asset.localhost",
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://api.x.ai wss://api.x.ai ws://127.0.0.1 http://localhost:* http://127.0.0.1:* ipc: http://ipc.localhost; img-src 'self' data: blob: asset: https://asset.localhost; media-src 'self' data: blob: asset: https://asset.localhost; frame-src 'self' http://localhost:* http://127.0.0.1:*",
       "assetProtocol": {
         "enable": true,
         "scope": {
@@ -46,6 +46,9 @@
     "externalBin": [
       "binaries/asciivision"
     ],
+    "resources": {
+      "../asciivision-core/demo-videos/": "demo-videos/"
+    },
     "macOS": {
       "infoPlist": "Info.plist",
       "dmg": {

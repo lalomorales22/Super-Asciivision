@@ -420,6 +420,10 @@ pub async fn create_asciivision_session(
     let mut cwd_candidates: Vec<std::path::PathBuf> = vec![
         binary_dir.to_path_buf(),
     ];
+    // macOS bundle: Contents/MacOS/../Resources/ (Tauri bundles resources here)
+    if let Some(macos_dir) = binary_dir.parent() {
+        cwd_candidates.push(macos_dir.join("Resources"));
+    }
     // asciivision-core/target/{release,debug}/ → asciivision-core/
     if let Some(grandparent) = binary_dir.parent().and_then(|p| p.parent()) {
         cwd_candidates.push(grandparent.to_path_buf());

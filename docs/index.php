@@ -225,8 +225,12 @@ html, body { height:100%; background:var(--bg-deep); color:var(--text-primary); 
 ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; } ::-webkit-scrollbar-thumb:hover { background:var(--border-bright); }
 ::selection { background:var(--accent-glow-strong); color:var(--accent); }
 
-#app { display:grid; height:100vh; grid-template-rows:auto 1fr; grid-template-columns:260px 1fr 340px; grid-template-areas:"header header header" "sidebar content chat"; }
-@media(max-width:1200px){ #app { grid-template-columns:230px 1fr; grid-template-areas:"header header" "sidebar content"; } #chat-panel{display:none;} #chat-fab{display:flex!important;} }
+#app { display:grid; position:fixed; inset:0; grid-template-rows:auto 1fr; grid-template-columns:260px 1fr 340px; grid-template-areas:"header header header" "sidebar content chat"; overflow:hidden; }
+@media(max-width:1200px){ #app { grid-template-columns:230px 1fr; grid-template-areas:"header header" "sidebar content"; } #chat-panel:not(.overlay-open){display:none!important;} #chat-fab{display:flex!important;} }
+#chat-panel.overlay-open { display:flex!important; position:fixed; right:0; top:0; bottom:0; width:340px; z-index:50; border-left:1px solid var(--border); box-shadow:-8px 0 40px rgba(0,0,0,0.5); }
+.chat-overlay-close { position:absolute; top:6px; right:8px; background:var(--bg-elevated); border:1px solid var(--border); color:var(--text-secondary); width:24px; height:24px; border-radius:4px; cursor:pointer; font-family:var(--font); font-size:12px; display:none; align-items:center; justify-content:center; z-index:2; }
+.overlay-open .chat-overlay-close { display:flex; }
+.chat-overlay-close:hover { background:var(--accent-glow); color:var(--accent); border-color:var(--accent-dim); }
 
 #header { grid-area:header; background:var(--bg-primary); border-bottom:1px solid var(--border); padding:0 20px; display:flex; align-items:center; gap:14px; height:48px; position:relative; }
 #header::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--accent),var(--cyan),var(--purple),var(--pink),var(--amber),var(--accent)); background-size:300% 100%; animation:hdrGlow 6s linear infinite; }
@@ -342,6 +346,7 @@ pre.td .kw { color:var(--purple); } pre.td .tp { color:var(--amber); } pre.td .s
 <main id="content"></main>
 
 <aside id="chat-panel">
+    <button class="chat-overlay-close" onclick="toggleChat()" title="Close">&times;</button>
     <div class="chat-hdr">AI Assistant (Ollama)</div>
     <div class="chat-ctrl">
         <select id="model-sel"><option value="" disabled selected>Loading models...</option></select>
@@ -788,7 +793,7 @@ async function sendMsg(){
     }
     sending=false;document.getElementById('send-btn').disabled=false;el.scrollTop=el.scrollHeight;
 }
-function toggleChat(){const p=document.getElementById('chat-panel');const on=p.style.display==='flex';p.style.display=on?'none':'flex';if(!on){p.style.position='fixed';p.style.right='0';p.style.top='0';p.style.bottom='0';p.style.width='340px';p.style.zIndex='50';}}
+function toggleChat(){const p=document.getElementById('chat-panel');const isOpen=p.classList.contains('overlay-open');if(isOpen){p.classList.remove('overlay-open');p.removeAttribute('style');}else{p.classList.add('overlay-open');}}
 
 // ── Init ────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded',async()=>{

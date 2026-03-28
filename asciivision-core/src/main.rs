@@ -498,9 +498,9 @@ impl App {
         let video = match video_path {
             Some(path) => {
                 let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((132, 46));
-                // Reserve space for borders and chrome
-                let decode_cols = term_cols.saturating_sub(6).max(40);
-                let decode_rows = term_rows.saturating_sub(8).max(20);
+                // Reserve space for TUI chrome: header(5) + input(4) + saying(1) + panel borders(2) + inner margins(2)
+                let decode_cols = term_cols.saturating_sub(4).max(40);
+                let decode_rows = term_rows.saturating_sub(14).max(20);
                 Some(VideoPlayer::new(path, (decode_cols, decode_rows), true)?)
             }
             None => None,
