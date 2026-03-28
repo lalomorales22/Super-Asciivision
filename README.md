@@ -11,7 +11,7 @@ Click the rainbow **ASCIIVISION** button in the nav bar to drop into the termina
 | Page | What it does |
 |------|-------------|
 | **Chat** | Streamed conversations with xAI or Ollama models, workspace-backed context, agentic tool use (file read/write, shell commands, search) |
-| **Image & Video** | Image and video generation via xAI, category-organized gallery |
+| **Image & Video** | Image and video generation via xAI or locally with Ollama (FLUX models), category-organized gallery |
 | **Voice & Audio** | Text-to-speech generation and live realtime voice chat |
 | **Media Editor** | Timeline-based export workflow via ffmpeg |
 | **IDE** | File explorer, multi-tab code editor with syntax highlighting, AI copilot (xAI or Ollama), Quick Open (Cmd+P), browser preview — opens without a workspace |
@@ -92,6 +92,13 @@ ollama pull qwen3.5:2b
 ```
 
 Then in the app, click the **Ollama** button (next to xAI) in the Chat or IDE pages to switch to local models. Your installed Ollama models will appear in the dropdown automatically.
+
+**Local image generation:** If you pull a FLUX model, you can generate images entirely on-device — no xAI key required:
+
+```bash
+ollama pull x/flux2-klein:4b    # lighter, faster
+ollama pull x/flux2-klein:9b    # higher quality
+```
 
 > **Note:** Ollama runs entirely on your machine — no API key needed, no data leaves your device.
 
@@ -229,27 +236,7 @@ No accounts, no deployment, no cloud services. All traffic stays on your local n
 
 ### Remote Access via Relay
 
-When you need access away from home, deploy the included relay server:
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/lalomorales22/Super-Asciivision)
-
-1. **Sign in** to [render.com](https://render.com) (free account works).
-2. **Pick a unique service name** when prompted (e.g. `alex-ascii-relay`). Render turns this into your public URL.
-3. **Click Deploy.** Copy your HTTPS URL from the Render dashboard.
-4. In the app, switch **Provider** to `Hands Relay`, paste the URL, and click **Start secure link**.
-
-> **Keep this URL private.** Anyone with it could connect to your relay.
-
-<details>
-<summary>Manual setup (fork + Blueprint)</summary>
-
-1. Open `render.yaml` in the repo root and change the `name` field to something unique.
-2. Push your fork to GitHub.
-3. In Render, click **New** > **Blueprint**, connect your repo. Render auto-detects `render.yaml`.
-4. Confirm the name and click **Apply**.
-5. Copy your Render HTTPS URL after deploy finishes.
-
-</details>
+For access away from home, deploy the included relay server. See [`hands-relay/README.md`](hands-relay/README.md) for setup instructions (one-click Render deploy or manual).
 
 ### Security Notes
 
