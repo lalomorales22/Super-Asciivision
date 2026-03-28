@@ -84,7 +84,7 @@ function project(v: V3, zoom: number, camDist: number) {
 
 // ---------- voxel penguin model -----------------------------------------------
 
-type Mat = "black" | "white" | "orange" | "blue"
+type Mat = "black" | "white" | "orange" | "blue" | "red" | "eyeHighlight"
 type Voxel = { p: V3; mat: Mat; baseB: number }
 
 function addEllipsoid(list: Voxel[], cx: number, cy: number, cz: number, rx: number, ry: number, rz: number, step: number, mat: Mat, baseB: number) {
@@ -107,30 +107,41 @@ function addEllipsoid(list: Voxel[], cx: number, cy: number, cz: number, rx: num
 
 function buildPenguin(): Voxel[] {
   const v: Voxel[] = []
-  const step = 0.28
+  const step = 0.22
 
-  // body + belly
-  addEllipsoid(v, 0, -0.2, 0, 1.55, 2.0, 1.25, step, "black", 0.55)
-  addEllipsoid(v, 0, 0.2, 0.75, 1.05, 1.35, 0.75, step, "white", 0.88)
+  // body - rounder, chubbier
+  addEllipsoid(v, 0, -0.1, 0, 1.7, 2.1, 1.4, step, "black", 0.55)
+  // belly - wider white patch
+  addEllipsoid(v, 0, 0.25, 0.8, 1.25, 1.5, 0.8, step, "white", 0.88)
 
-  // head + face patch
-  addEllipsoid(v, 0, -2.05, 0.15, 1.05, 1.0, 0.95, step, "black", 0.55)
-  addEllipsoid(v, 0, -1.9, 0.9, 0.75, 0.55, 0.55, step, "white", 0.92)
+  // head - bigger relative to body for cuteness
+  addEllipsoid(v, 0, -2.1, 0.1, 1.2, 1.15, 1.1, step, "black", 0.55)
+  // face patch - wider white area
+  addEllipsoid(v, 0, -1.95, 0.95, 0.85, 0.65, 0.6, step, "white", 0.92)
 
-  // eyes
-  addEllipsoid(v, -0.35, -2.05, 1.08, 0.18, 0.18, 0.12, 0.22, "blue", 1.0)
-  addEllipsoid(v, 0.35, -2.05, 1.08, 0.18, 0.18, 0.12, 0.22, "blue", 1.0)
+  // eyes - dark, realistic
+  addEllipsoid(v, -0.38, -2.1, 1.12, 0.2, 0.2, 0.14, 0.18, "blue", 1.0)
+  addEllipsoid(v, 0.38, -2.1, 1.12, 0.2, 0.2, 0.14, 0.18, "blue", 1.0)
 
-  // beak
-  addEllipsoid(v, 0, -1.65, 1.22, 0.34, 0.22, 0.26, 0.22, "orange", 0.95)
+  // eye highlights - small white dots on upper-right of each eye
+  addEllipsoid(v, -0.3, -2.18, 1.2, 0.07, 0.07, 0.06, 0.12, "eyeHighlight", 1.0)
+  addEllipsoid(v, 0.46, -2.18, 1.2, 0.07, 0.07, 0.06, 0.12, "eyeHighlight", 1.0)
 
-  // wings
-  addEllipsoid(v, -1.55, -0.45, 0.2, 0.55, 1.25, 0.6, step, "black", 0.52)
-  addEllipsoid(v, 1.55, -0.45, 0.2, 0.55, 1.25, 0.6, step, "black", 0.52)
+  // beak - slightly larger
+  addEllipsoid(v, 0, -1.65, 1.3, 0.4, 0.26, 0.3, 0.18, "orange", 0.95)
 
-  // feet
-  addEllipsoid(v, -0.55, 1.95, 0.55, 0.55, 0.25, 0.75, 0.26, "orange", 0.85)
-  addEllipsoid(v, 0.55, 1.95, 0.55, 0.55, 0.25, 0.75, 0.26, "orange", 0.85)
+  // red scarf / bow tie around neck
+  addEllipsoid(v, 0, -1.15, 0.4, 1.35, 0.28, 1.1, step, "red", 0.85)
+  // bow tie knot (front center)
+  addEllipsoid(v, 0, -1.15, 1.15, 0.3, 0.22, 0.25, 0.18, "red", 0.9)
+
+  // wings - shorter, stubbier, closer to body
+  addEllipsoid(v, -1.6, -0.35, 0.15, 0.45, 1.1, 0.5, step, "black", 0.52)
+  addEllipsoid(v, 1.6, -0.35, 0.15, 0.45, 1.1, 0.5, step, "black", 0.52)
+
+  // feet - bigger, rounder
+  addEllipsoid(v, -0.6, 2.05, 0.6, 0.65, 0.3, 0.85, 0.2, "orange", 0.85)
+  addEllipsoid(v, 0.6, 2.05, 0.6, 0.65, 0.3, 0.85, 0.2, "orange", 0.85)
 
   return v
 }
@@ -140,8 +151,10 @@ const penguinModel = buildPenguin()
 function matRGB(mat: Mat) {
   if (mat === "white") return { r: 245, g: 250, b: 255 }
   if (mat === "orange") return { r: 251, g: 146, b: 60 }
-  if (mat === "blue") return { r: 96, g: 165, b: 250 }
-  return { r: 150, g: 162, b: 178 }
+  if (mat === "blue") return { r: 15, g: 15, b: 25 }
+  if (mat === "red") return { r: 200, g: 35, b: 40 }
+  if (mat === "eyeHighlight") return { r: 255, g: 255, b: 255 }
+  return { r: 25, g: 28, b: 35 }   // "black" - very dark, almost true black
 }
 
 const lightDir = (() => {
@@ -154,7 +167,7 @@ function brightnessForPoint(p: V3, baseB: number) {
   const d = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z) || 1
   const n = { x: p.x / d, y: p.y / d, z: p.z / d }
   const ndotl = clamp(n.x * lightDir.x + n.y * lightDir.y + n.z * lightDir.z, 0, 1)
-  return clamp(baseB * 0.65 + ndotl * 0.75, 0, 1)
+  return clamp(baseB * 0.45 + ndotl * 0.95, 0, 1)
 }
 
 // ---------- game world --------------------------------------------------------
