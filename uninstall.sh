@@ -54,6 +54,16 @@ if [[ "$OS" == "Darwin" ]]; then
   # Tauri WebView cache
   remove_if_exists "$HOME/Library/WebKit/com.megabrain2.superasciivision" "WebView cache"
 
+  # ASCIIVision terminal data (conversations, config)
+  remove_if_exists "$HOME/.config/asciivision" "ASCIIVision data"
+
+  # Keychain entry (API key)
+  if security find-generic-password -s "com.megabrain2.superasciivision" &>/dev/null; then
+    security delete-generic-password -s "com.megabrain2.superasciivision" &>/dev/null
+    ok "Removed Keychain entry"
+    REMOVED=$((REMOVED + 1))
+  fi
+
   # Music folder (ask first)
   MUSIC_DIR="$HOME/Music/SuperASCIIVision"
   if [[ -d "$MUSIC_DIR" ]]; then
@@ -89,6 +99,14 @@ elif [[ "$OS" == "Linux" ]]; then
 
   # App data (database, secrets, workspaces)
   remove_if_exists "$HOME/.local/share/SuperASCIIVision" "App data"
+
+  # ASCIIVision terminal data (conversations, config)
+  remove_if_exists "$HOME/.config/asciivision" "ASCIIVision data"
+
+  # Keychain entry (API key stored via libsecret)
+  if command -v secret-tool &>/dev/null; then
+    secret-tool clear service "com.megabrain2.superasciivision" 2>/dev/null && ok "Removed secret store entry" || true
+  fi
 
   # Music folder (ask first)
   MUSIC_DIR="$HOME/Music/SuperASCIIVision"

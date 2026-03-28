@@ -122,13 +122,23 @@ sudo apt-get install -y --allow-downgrades \
 
 ## Uninstall
 
-To completely remove Super ASCIIVision and its data:
+To completely remove Super ASCIIVision and all of its data:
 
 ```bash
 ./uninstall.sh
 ```
 
-Works on both macOS and Linux. It will ask for confirmation before removing anything, and will prompt separately before deleting your music folder.
+Works on both macOS and Linux. The script removes everything:
+
+- **App binary** — `/Applications/Super ASCIIVision.app` (macOS) or `~/.local/bin/super-asciivision` (Linux)
+- **App data** — database, settings, workspaces, secrets
+- **ASCIIVision data** — terminal chat history (`~/.config/asciivision/`)
+- **Keychain / secret store** — stored API keys (macOS Keychain / Linux Secret Service)
+- **WebView cache** (macOS)
+- **Desktop entry and icon** (Linux)
+- **Music folder** — only if you confirm (prompted separately)
+
+The script asks for confirmation before removing anything.
 
 ---
 
