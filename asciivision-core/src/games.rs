@@ -144,8 +144,16 @@ impl GamesPanel {
         // Try to launch the OpenTUI version first (much richer graphics)
         match try_launch_opentui(self.selected) {
             Ok(session) => {
-                self.session = Some(GameSession::OpenTui(session, self.selected));
-                self.status = format!("games: {} (OpenTUI)", self.selected.label());
+                // Give the process a moment to crash (e.g. missing module)
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                if session.has_exited() {
+                    // Process died immediately — fall back to built-in
+                    self.session = Some(GameSession::new_builtin(self.selected));
+                    self.status = format!("games: {} (built-in)", self.selected.label());
+                } else {
+                    self.session = Some(GameSession::OpenTui(session, self.selected));
+                    self.status = format!("games: {} (OpenTUI)", self.selected.label());
+                }
             }
             Err(_) => {
                 // Fall back to the built-in ASCII version
@@ -378,7 +386,12 @@ impl GameSession {
         let kind = self.kind();
         if self.is_opentui() {
             if let Ok(session) = try_launch_opentui(kind) {
-                *self = Self::OpenTui(session, kind);
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                if session.has_exited() {
+                    *self = Self::new_builtin(kind);
+                } else {
+                    *self = Self::OpenTui(session, kind);
+                }
             } else {
                 *self = Self::new_builtin(kind);
             }
@@ -446,6 +459,21 @@ fn try_launch_opentui(kind: GameKind) -> anyhow::Result<TerminalSession> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("cannot determine game directory"))?;
 
+    // Auto-install dependencies if node_modules is missing (uses bun.lock for speed)
+    if !game_dir.join("node_modules").exists() {
+        let install = std::process::Command::new(bun.to_str().unwrap_or("bun"))
+            .args(["install", "--frozen-lockfile"])
+            .current_dir(game_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if let Ok(status) = install {
+            if !status.success() {
+                anyhow::bail!("bun install failed for {}", kind.label());
+            }
+        }
+    }
+
     TerminalSession::spawn_command(
         bun.to_str().unwrap_or("bun"),
         &[script.to_str().unwrap_or("")],
@@ -503,6 +531,10 @@ fn find_game_script(kind: GameKind) -> anyhow::Result<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             candidates.push(exe_dir.join(script_rel));
+            // macOS bundle: Contents/MacOS/../Resources/ (Tauri bundles resources here)
+            if let Some(contents_dir) = exe_dir.parent() {
+                candidates.push(contents_dir.join("Resources").join(script_rel));
+            }
             // Development: exe might be in target/debug or target/release
             if let Some(project_root) = exe_dir.parent().and_then(|p| p.parent()) {
                 candidates.push(project_root.join(script_rel));

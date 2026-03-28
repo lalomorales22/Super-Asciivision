@@ -47,7 +47,16 @@
       "binaries/asciivision"
     ],
     "resources": {
-      "../asciivision-core/demo-videos/": "demo-videos/"
+      "../asciivision-core/demo-videos/": "demo-videos/",
+      "../asciivision-core/games/PacMan/index.ts": "games/PacMan/index.ts",
+      "../asciivision-core/games/PacMan/package.json": "games/PacMan/package.json",
+      "../asciivision-core/games/PacMan/bun.lock": "games/PacMan/bun.lock",
+      "../asciivision-core/games/3d-penguin/index.ts": "games/3d-penguin/index.ts",
+      "../asciivision-core/games/3d-penguin/package.json": "games/3d-penguin/package.json",
+      "../asciivision-core/games/3d-penguin/bun.lock": "games/3d-penguin/bun.lock",
+      "../asciivision-core/games/Space-Invaders/index.ts": "games/Space-Invaders/index.ts",
+      "../asciivision-core/games/Space-Invaders/package.json": "games/Space-Invaders/package.json",
+      "../asciivision-core/games/Space-Invaders/bun.lock": "games/Space-Invaders/bun.lock"
     },
     "macOS": {
       "infoPlist": "Info.plist",
