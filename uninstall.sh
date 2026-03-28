@@ -32,7 +32,7 @@ echo ""
 
 # ── Confirm ────────────────────────────────
 read -rp "This will remove $APP_NAME and its data. Continue? [y/N] " confirm
-if [[ "${confirm,,}" != "y" ]]; then
+if [[ "$(printf '%s' "$confirm" | tr '[:upper:]' '[:lower:]')" != "y" ]]; then
   echo "Cancelled."
   exit 0
 fi
@@ -58,7 +58,7 @@ if [[ "$OS" == "Darwin" ]]; then
   MUSIC_DIR="$HOME/Music/SuperASCIIVision"
   if [[ -d "$MUSIC_DIR" ]]; then
     read -rp "Remove music folder at $MUSIC_DIR? [y/N] " rm_music
-    if [[ "${rm_music,,}" == "y" ]]; then
+    if [[ "$(printf '%s' "$rm_music" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
       remove_if_exists "$MUSIC_DIR" "Music folder"
     else
       warn "Kept music folder at $MUSIC_DIR"
@@ -94,7 +94,7 @@ elif [[ "$OS" == "Linux" ]]; then
   MUSIC_DIR="$HOME/Music/SuperASCIIVision"
   if [[ -d "$MUSIC_DIR" ]]; then
     read -rp "Remove music folder at $MUSIC_DIR? [y/N] " rm_music
-    if [[ "${rm_music,,}" == "y" ]]; then
+    if [[ "$(printf '%s' "$rm_music" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
       remove_if_exists "$MUSIC_DIR" "Music folder"
     else
       warn "Kept music folder at $MUSIC_DIR"
