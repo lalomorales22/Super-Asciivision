@@ -61,6 +61,9 @@ Thumbs.db
 # Tool artifacts
 .kit-lock.json
 kits/
+CLAUDE.md
+LAUNCH_AUDIT_PROMPT.md
+tasks.md
 
 # Vite
 *.local
