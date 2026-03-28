@@ -120,6 +120,18 @@ sudo apt-get install -y --allow-downgrades \
 
 ---
 
+## Uninstall
+
+To completely remove Super ASCIIVision and its data:
+
+```bash
+./uninstall.sh
+```
+
+Works on both macOS and Linux. It will ask for confirmation before removing anything, and will prompt separately before deleting your music folder.
+
+---
+
 ## Build From Source
 
 ### macOS
