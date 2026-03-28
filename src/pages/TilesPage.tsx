@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import clsx from "clsx";
 import { LayoutGrid } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Terminal as XTerm } from "xterm";
 import { api } from "../lib/tauri";
@@ -14,6 +14,7 @@ export function TilesPage() {
   const setLayout = useTileStore((state) => state.setTileLayout);
   const sessions = useTileStore((state) => state.tileSessionIds);
   const setSessions = useTileStore((state) => state.setTileSessionIds);
+  const [focusedSession, setFocusedSession] = useState<string>();
 
   // Spawn new terminals only when the layout needs more than we currently have.
   // Never kill terminals on downsize — they stay alive in the background so the
@@ -88,14 +89,19 @@ export function TilesPage() {
       </div>
       <div className={clsx("grid flex-1 min-h-0 gap-1 p-1", gridClass)}>
         {visibleSessions.map((sessionId) => (
-          <TileTerminal key={sessionId} sessionId={sessionId} />
+          <TileTerminal
+            key={sessionId}
+            sessionId={sessionId}
+            focused={focusedSession === sessionId}
+            onFocus={() => setFocusedSession(sessionId)}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function TileTerminal({ sessionId }: { sessionId: string }) {
+function TileTerminal({ sessionId, focused, onFocus }: { sessionId: string; focused: boolean; onFocus: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -202,7 +208,15 @@ function TileTerminal({ sessionId }: { sessionId: string }) {
   }, [sessionId]);
 
   return (
-    <div className="min-h-0 min-w-0 overflow-hidden rounded-xl border border-white/8 bg-[#070809]">
+    <div
+      className={clsx(
+        "min-h-0 min-w-0 overflow-hidden rounded-xl border bg-[#070809] transition-colors",
+        focused
+          ? "border-emerald-400/40 shadow-[0_0_0_1px_rgba(52,211,153,0.15)]"
+          : "border-white/8 hover:border-white/14",
+      )}
+      onPointerDown={onFocus}
+    >
       <div ref={hostRef} className="h-full w-full overflow-hidden p-1" />
     </div>
   );

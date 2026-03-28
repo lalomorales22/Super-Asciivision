@@ -169,7 +169,7 @@ export function MusicPage() {
                 <>Scanning… <span className="font-['IBM_Plex_Mono'] text-stone-400">{folderDisplay?.replace(/^\/Users\/[^/]+/, "~")}</span></>
               ) : folderDisplay ? (
                 <>Browsing <span className="font-['IBM_Plex_Mono'] text-stone-400">{folderDisplay.replace(/^\/Users\/[^/]+/, "~")}</span></>
-              ) : "Play audio files from any folder on your Mac."}
+              ) : "Play audio files from any folder on your computer."}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -188,7 +188,7 @@ export function MusicPage() {
               className="inline-flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/5 px-3 py-2 text-[10px] text-stone-200 transition hover:bg-white/10"
             >
               <Folder className="h-3 w-3" />
-              Show in Finder
+              Show in Folder
             </button>
             <button
               type="button"
@@ -394,14 +394,14 @@ export function MusicPage() {
                 type="button"
                 onClick={() => {
                   setCtxMenu(null);
-                  // Reveal track in Finder
+                  // Reveal track in file manager
                   const dir = ctxMenu.track.filePath.substring(0, ctxMenu.track.filePath.lastIndexOf("/"));
                   if (dir) void api.revealMusicFolder(dir);
                 }}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-stone-300 transition hover:bg-white/8"
               >
                 <Folder className="h-3 w-3 text-stone-400" />
-                Show in Finder
+                Show in Folder
               </button>
             </div>,
             document.body,

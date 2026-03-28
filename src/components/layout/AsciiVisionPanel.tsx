@@ -1,9 +1,111 @@
 import { listen } from "@tauri-apps/api/event";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import clsx from "clsx";
+import { HelpCircle, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "xterm";
 import { api } from "../../lib/tauri";
+
+const HELP_DISMISSED_KEY = "asciivision_help_seen";
+
+const SHORTCUT_SECTIONS = [
+  {
+    title: "AI & Chat",
+    items: [
+      ["F2", "Switch AI provider (Claude / Grok / GPT / Gemini / Ollama)"],
+      ["/help", "Show all slash commands"],
+      ["/provider", "Change AI provider"],
+      ["/ollama", "Switch to local Ollama"],
+      ["/stream", "Toggle streaming mode"],
+      ["/trust", "Set command execution policy"],
+    ],
+  },
+  {
+    title: "Media",
+    items: [
+      ["F5", "Toggle live webcam (ASCII art)"],
+      ["/video <path>", "Play MP4 as ASCII art"],
+      ["/youtube <url>", "Play YouTube video as ASCII"],
+      ["F4", "Cycle 3D effects (matrix, plasma, fire, etc.)"],
+      ["/effects", "List all 3D effects"],
+    ],
+  },
+  {
+    title: "Terminal & Tiling",
+    items: [
+      ["F6 / F7", "Tiling controls (layout / panel count)"],
+      ["/tiles", "Open tile manager"],
+      ["Ctrl+W/A/S/D", "Focus tile: up / left / down / right"],
+      ["/run <cmd>", "Execute a shell command"],
+      ["/bash", "Open inline bash shell"],
+    ],
+  },
+  {
+    title: "System & Tools",
+    items: [
+      ["/analytics", "System analytics display"],
+      ["/sysmon", "System monitor (CPU, memory, network)"],
+      ["/games", "Arcade games (Pac-Man, Space Invaders, Penguin)"],
+      ["F8", "Launch games menu"],
+      ["/remember", "Save to agent memory"],
+      ["/recall", "Recall agent memory"],
+    ],
+  },
+  {
+    title: "Appearance & Navigation",
+    items: [
+      ["F9", "Cycle color themes"],
+      ["F10", "Reset theme to default"],
+      ["/clear", "Clear the terminal screen"],
+      ["Ctrl+Esc", "Exit ASCIIVision and return to the app"],
+    ],
+  },
+];
+
+function HelpOverlay({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+      <div className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-[24px] border border-cyan-400/20 bg-[linear-gradient(180deg,#0a0b0d,#070809)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.6)] [scrollbar-width:thin] [scrollbar-color:rgba(255,255,255,0.12)_transparent]">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.35em] text-cyan-300/70">ASCIIVision</p>
+            <h3 className="mt-2 text-[16px] font-semibold text-stone-100">Keyboard Shortcuts & Commands</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-white/8 bg-white/5 p-1.5 text-stone-400 transition hover:bg-white/10 hover:text-stone-200"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {SHORTCUT_SECTIONS.map((section) => (
+            <div key={section.title} className="rounded-[18px] border border-white/8 bg-white/[0.03] p-3">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-200/70">{section.title}</p>
+              <div className="mt-2.5 space-y-1.5">
+                {section.items.map(([key, desc]) => (
+                  <div key={key} className="flex items-start gap-2">
+                    <kbd className="shrink-0 rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 font-['IBM_Plex_Mono'] text-[9px] text-cyan-100">
+                      {key}
+                    </kbd>
+                    <span className="text-[10px] leading-4 text-stone-400">{desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <p className="mt-4 text-center text-[9px] text-stone-600">
+          Type <kbd className="rounded border border-white/10 bg-white/[0.06] px-1 py-0.5 font-['IBM_Plex_Mono']">/help</kbd> in the terminal for the full command list
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export function AsciiVisionPanel({ onClose }: { onClose: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -14,6 +116,15 @@ export function AsciiVisionPanel({ onClose }: { onClose: () => void }) {
   onCloseRef.current = onClose;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [helpVisible, setHelpVisible] = useState(
+    () => localStorage.getItem(HELP_DISMISSED_KEY) !== "1",
+  );
+
+  const dismissHelp = () => {
+    localStorage.setItem(HELP_DISMISSED_KEY, "1");
+    setHelpVisible(false);
+    xtermRef.current?.focus();
+  };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -245,7 +356,21 @@ export function AsciiVisionPanel({ onClose }: { onClose: () => void }) {
             </div>
           </div>
         ) : null}
+        {helpVisible && !loading && !error ? <HelpOverlay onClose={dismissHelp} /> : null}
         <div ref={hostRef} className="absolute top-0.5 bottom-4 left-2 right-2 overflow-hidden" />
+        {!loading && !error && !helpVisible ? (
+          <button
+            type="button"
+            onClick={() => setHelpVisible(true)}
+            className={clsx(
+              "absolute bottom-6 right-4 z-10 flex items-center gap-1.5 rounded-full border border-white/10 bg-black/70 px-2.5 py-1 text-[10px] text-stone-400 shadow-lg backdrop-blur-md transition hover:bg-white/10 hover:text-stone-200",
+            )}
+            title="Show keyboard shortcuts"
+          >
+            <HelpCircle className="h-3.5 w-3.5" />
+            Shortcuts
+          </button>
+        ) : null}
       </div>
     </div>
   );

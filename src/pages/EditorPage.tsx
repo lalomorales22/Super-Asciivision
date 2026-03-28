@@ -210,9 +210,13 @@ export function EditorPage({
   useEffect(() => {
     if (!ctxMenu) return undefined;
     const dismiss = () => setCtxMenu(undefined);
+    const onKeydown = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
     window.addEventListener("pointerdown", dismiss);
-    window.addEventListener("keydown", (e) => { if (e.key === "Escape") dismiss(); });
-    return () => { window.removeEventListener("pointerdown", dismiss); };
+    window.addEventListener("keydown", onKeydown);
+    return () => {
+      window.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", onKeydown);
+    };
   }, [ctxMenu]);
 
   // Audio elements map for playback

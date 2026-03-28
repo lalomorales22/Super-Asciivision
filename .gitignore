@@ -12,6 +12,7 @@ pnpm-debug.log*
 !.env.example
 !asciivision-core/.env.example
 *.key
+secrets/
 
 # Local databases and app state
 *.db
@@ -46,6 +47,7 @@ src-tauri/binaries/asciivision-*
 # Editor directories and files
 .vscode
 .idea
+.cursor
 *.suo
 *.ntvs*
 *.njsproj
@@ -55,6 +57,10 @@ src-tauri/binaries/asciivision-*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Tool artifacts
+.kit-lock.json
+kits/
 
 # Vite
 *.local

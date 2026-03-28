@@ -35,7 +35,7 @@
         "enable": true,
         "scope": {
           "allow": ["$HOME/**", "$APPDATA/**", "$LOCALDATA/**", "$AUDIO/**", "$DESKTOP/**", "$DOCUMENT/**", "$DOWNLOAD/**"],
-          "deny": ["$HOME/.ssh/**", "$HOME/.gnupg/**"]
+          "deny": ["$HOME/.ssh/**", "$HOME/.gnupg/**", "$HOME/.aws/**", "$HOME/.config/gcloud/**", "$HOME/.kube/**", "$HOME/.docker/**", "$HOME/Library/Keychains/**"]
         }
       }
     }

@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
@@ -31,7 +31,12 @@ vi.mock("qrcode", () => ({ default: { toDataURL: vi.fn().mockResolvedValue("data
 
 // Mock Tauri API layer
 vi.mock("../lib/tauri", () => ({
-  api: new Proxy({}, { get: () => vi.fn().mockResolvedValue([]) }),
+  api: new Proxy({}, {
+    get: (_target: unknown, prop: string) => {
+      if (prop === "getDefaultMusicFolder") return vi.fn().mockResolvedValue("/music");
+      return vi.fn().mockResolvedValue([]);
+    },
+  }),
   events: new Proxy({}, { get: () => vi.fn().mockResolvedValue(() => {}) }),
 }));
 
@@ -189,8 +194,12 @@ describe("Page smoke tests", () => {
 
   it("MusicPage mounts without crashing", async () => {
     const { MusicPage } = await import("./MusicPage");
-    const { container } = render(<MusicPage />);
-    expect(container).toBeTruthy();
+    let container: HTMLElement;
+    await act(async () => {
+      const result = render(<MusicPage />);
+      container = result.container;
+    });
+    expect(container!).toBeTruthy();
   });
 
   it("ImaginePage mounts without crashing", async () => {

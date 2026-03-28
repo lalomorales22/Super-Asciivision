@@ -25,6 +25,7 @@ interface AppState {
   error?: string;
   info?: string;
   settingsOpen: boolean;
+  settingsInitialTab?: string;
   providerStatuses: ProviderStatus[];
   models: ModelMap;
   settings?: Settings;
@@ -35,7 +36,7 @@ interface AppState {
   refreshModels: () => Promise<void>;
   selectModel: (modelId: string) => void;
   setSelectedProvider: (provider: ProviderId) => void;
-  toggleSettings: (value?: boolean) => void;
+  toggleSettings: (value?: boolean, tab?: string) => void;
   saveSettings: (next: Partial<Settings>) => Promise<void>;
   saveApiKey: (provider: ProviderId, apiKey: string) => Promise<void>;
   deleteApiKey: (provider: ProviderId) => Promise<void>;
@@ -57,7 +58,7 @@ const fallbackSettings: Settings = {
   xaiTtsModel: "xai-tts",
   xaiRealtimeModel: "grok-realtime",
   xaiVoiceName: "eve",
-  handsTunnelProvider: "relay",
+  handsTunnelProvider: "local",
   handsTunnelExecutable: "",
   handsRelayUrl: "",
   handsRelayMachineId: "",
@@ -151,7 +152,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         settings,
         providerStatuses,
-        selectedProvider: "xai",
+        selectedProvider: settings.defaultProvider ?? "xai",
         selectedModel: settings.xaiModel ?? fallbackSettings.xaiModel ?? "grok-4-1-fast-reasoning",
         initialized: true,
         booting: false,
@@ -210,15 +211,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedModel: pickModel(state.models, provider, state.settings?.ollamaModel ?? undefined),
     })),
 
-  toggleSettings: (value) =>
-    set((state) => ({ settingsOpen: typeof value === "boolean" ? value : !state.settingsOpen })),
+  toggleSettings: (value, tab) =>
+    set((state) => ({
+      settingsOpen: typeof value === "boolean" ? value : !state.settingsOpen,
+      settingsInitialTab: tab,
+    })),
 
   saveSettings: async (next) => {
     const current = get().settings ?? fallbackSettings;
     const settings = await api.updateSettings({
       hotkey: next.hotkey ?? current.hotkey,
       alwaysOnTop: next.alwaysOnTop ?? current.alwaysOnTop,
-      defaultProvider: "xai",
+      defaultProvider: next.defaultProvider ?? current.defaultProvider ?? "xai",
       xaiModel: next.xaiModel ?? current.xaiModel ?? fallbackSettings.xaiModel ?? "",
       xaiImageModel: next.xaiImageModel ?? current.xaiImageModel ?? fallbackSettings.xaiImageModel ?? "",
       xaiVideoModel: next.xaiVideoModel ?? current.xaiVideoModel ?? fallbackSettings.xaiVideoModel ?? "",
@@ -255,7 +259,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     set({
       settings,
-      selectedProvider: "xai",
+      selectedProvider: settings.defaultProvider ?? "xai",
       selectedModel: settings.xaiModel ?? pickModel(get().models),
     });
   },

@@ -18,7 +18,7 @@ export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void 
   const refreshHandsStatus = useHandsStore((state) => state.refreshHandsStatus);
   const startHandsService = useHandsStore((state) => state.startHandsService);
   const stopHandsService = useHandsStore((state) => state.stopHandsService);
-  const [provider, setProvider] = useState(settings?.handsTunnelProvider ?? "relay");
+  const [provider, setProvider] = useState(settings?.handsTunnelProvider ?? "local");
   const [tunnelExecutable, setTunnelExecutable] = useState(settings?.handsTunnelExecutable ?? "");
   const [relayUrl, setRelayUrl] = useState(settings?.handsRelayUrl ?? "");
   const [savingSetup, setSavingSetup] = useState(false);
@@ -31,7 +31,7 @@ export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void 
   const [qrCodeUrl, setQrCodeUrl] = useState<string>();
 
   useEffect(() => {
-    setProvider(settings?.handsTunnelProvider ?? "relay");
+    setProvider(settings?.handsTunnelProvider ?? "local");
     setTunnelExecutable(settings?.handsTunnelExecutable ?? "");
     setRelayUrl(settings?.handsRelayUrl ?? "");
   }, [settings?.handsTunnelExecutable, settings?.handsTunnelProvider, settings?.handsRelayUrl]);
@@ -53,7 +53,7 @@ export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void 
   const pairingCode = handsStatus?.pairingCode ?? "";
   const executableChanged = tunnelExecutable !== (settings?.handsTunnelExecutable ?? "");
   const relayChanged = relayUrl !== (settings?.handsRelayUrl ?? "");
-  const providerChanged = provider !== (settings?.handsTunnelProvider ?? "relay");
+  const providerChanged = provider !== (settings?.handsTunnelProvider ?? "local");
   const activityItems = handsStatus?.activity ?? [];
   const messageItems = activityItems.filter((item) => ["message", "assistant", "connection", "system"].includes(item.kind));
   const taskItems = activityItems.filter((item) => ["image", "video", "audio", "system"].includes(item.kind));
@@ -452,33 +452,78 @@ export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void 
                     onChange={(event) => setProvider(event.target.value)}
                     className="w-full rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-2 text-[11px] text-stone-100 outline-none transition focus:border-emerald-300/30"
                   >
-                    <option value="relay">Hands Relay</option>
-                    <option value="cloudflare">Cloudflare tunnel</option>
+                    <option value="local">Local Network (zero setup)</option>
+                    <option value="relay">Hands Relay (remote access)</option>
+                    <option value="cloudflare">Cloudflare tunnel (advanced)</option>
                   </select>
-                </label>
-                <label className="mt-4 block">
-                  <span className="mb-2 block text-[10px] uppercase tracking-[0.28em] text-stone-500">Your Relay URL</span>
-                  <input
-                    value={relayUrl}
-                    onChange={(event) => setRelayUrl(event.target.value)}
-                    placeholder="https://your-hands-relay.onrender.com"
-                    className="w-full rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-2 font-['IBM_Plex_Mono'] text-[11px] text-stone-100 outline-none transition focus:border-emerald-300/30"
-                  />
-                  <span className="mt-1.5 block text-[10px] leading-[1.5] text-amber-300/70">
-                    You must deploy your own relay. All Hands traffic (messages, generated files) passes through this server.
-                    Never use someone else's relay URL — they could see your data. Deploy the hands-relay folder to Render
-                    (free tier) or any HTTPS host you control. See the README for setup steps.
+                  <span className="mt-1.5 block text-[10px] leading-[1.5] text-stone-400">
+                    {provider === "local"
+                      ? "Works instantly on the same WiFi. Your phone connects directly to this machine — no server, no account, no config."
+                      : provider === "relay"
+                        ? "Deploy the included relay to Render (free) for access away from home. Your phone connects through it to reach this desktop."
+                        : "Requires the cloudflared binary installed locally. Creates a tunnel without deploying a separate server."}
                   </span>
                 </label>
-                <label className="block">
-                  <span className="mb-2 block text-[10px] uppercase tracking-[0.28em] text-stone-500">Tunnel Executable</span>
-                  <input
-                    value={tunnelExecutable}
-                    onChange={(event) => setTunnelExecutable(event.target.value)}
-                    placeholder="cloudflared"
-                    className="w-full rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-2 font-['IBM_Plex_Mono'] text-[11px] text-stone-100 outline-none transition focus:border-emerald-300/30"
-                  />
-                </label>
+                {provider === "local" && (
+                  <div className="mt-4 rounded-[16px] border border-emerald-300/14 bg-emerald-300/[0.04] p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-emerald-200/70">How it works</p>
+                    <p className="mt-2 text-[10px] leading-[1.6] text-stone-400">
+                      Click <span className="font-semibold text-stone-200">Start secure link</span> above.
+                      The app detects your LAN IP and generates a QR code your phone can scan.
+                      Both devices must be on the same WiFi network. No cloud services involved.
+                    </p>
+                    <p className="mt-2 text-[10px] leading-[1.5] text-stone-500">
+                      Need access away from home? Switch to <span className="font-semibold text-stone-300">Hands Relay</span> to deploy a free cloud relay.
+                    </p>
+                  </div>
+                )}
+                {provider === "relay" && (
+                  <div className="mt-4">
+                    <label className="block">
+                      <span className="mb-2 block text-[10px] uppercase tracking-[0.28em] text-stone-500">Your Relay URL</span>
+                      <input
+                        value={relayUrl}
+                        onChange={(event) => setRelayUrl(event.target.value)}
+                        placeholder="https://your-hands-relay.onrender.com"
+                        className="w-full rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-2 font-['IBM_Plex_Mono'] text-[11px] text-stone-100 outline-none transition focus:border-emerald-300/30"
+                      />
+                    </label>
+                    <div className="mt-2 rounded-[16px] border border-white/8 bg-white/[0.03] p-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-stone-400">Quick setup</p>
+                      <ol className="mt-2 space-y-1.5 text-[10px] leading-[1.6] text-stone-400">
+                        <li>1. Click the deploy button below to create a free relay on Render</li>
+                        <li>2. Pick a unique name (becomes your URL)</li>
+                        <li>3. Copy the URL and paste it above</li>
+                      </ol>
+                      <a
+                        href="https://render.com/deploy?repo=https://github.com/lalomorales22/Super-Asciivision"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-3 inline-flex items-center gap-2 rounded-xl border border-emerald-300/18 bg-emerald-300/10 px-3 py-1.5 text-[10px] font-semibold text-emerald-100 transition hover:bg-emerald-300/18"
+                      >
+                        Deploy to Render (free)
+                        <svg className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      </a>
+                    </div>
+                    <span className="mt-2 block text-[10px] leading-[1.5] text-amber-300/70">
+                      All Hands traffic passes through this server. Never use someone else's relay URL — they could see your data.
+                    </span>
+                  </div>
+                )}
+                {provider === "cloudflare" && (
+                  <label className="mt-4 block">
+                    <span className="mb-2 block text-[10px] uppercase tracking-[0.28em] text-stone-500">Tunnel Executable</span>
+                    <input
+                      value={tunnelExecutable}
+                      onChange={(event) => setTunnelExecutable(event.target.value)}
+                      placeholder="cloudflared"
+                      className="w-full rounded-2xl border border-white/8 bg-white/[0.04] px-3 py-2 font-['IBM_Plex_Mono'] text-[11px] text-stone-100 outline-none transition focus:border-emerald-300/30"
+                    />
+                    <span className="mt-1.5 block text-[10px] leading-[1.5] text-stone-400">
+                      Path to the cloudflared binary. Install it with <code className="rounded bg-white/8 px-1 py-0.5">brew install cloudflared</code> (macOS) or from the Cloudflare docs.
+                    </span>
+                  </label>
+                )}
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -491,7 +536,7 @@ export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void 
                   <button
                     type="button"
                     onClick={() => {
-                      setProvider(settings?.handsTunnelProvider ?? "relay");
+                      setProvider(settings?.handsTunnelProvider ?? "local");
                       setTunnelExecutable(settings?.handsTunnelExecutable ?? "");
                       setRelayUrl(settings?.handsRelayUrl ?? "");
                     }}
@@ -503,11 +548,12 @@ export function HandsPage({ onNavigate }: { onNavigate: (page: AppPage) => void 
                 </div>
               </div>
               <div className="rounded-[20px] border border-white/8 bg-black/20 p-3">
-                <p className="text-[10px] uppercase tracking-[0.28em] text-stone-500">Short-term recommendation</p>
+                <p className="text-[10px] uppercase tracking-[0.28em] text-stone-500">How it works</p>
                 <ol className="mt-3 space-y-2 text-[11px] leading-5 text-stone-400">
-                  <li>1. Use `Hands Relay` when you control a deployed relay host and want your own public URL layer.</li>
-                  <li>2. Use `Cloudflare tunnel` only as a fallback if you still want the binary-based route.</li>
-                  <li>3. QR plus pairing code remains the primary phone onboarding flow for both providers.</li>
+                  <li><span className="font-semibold text-emerald-200">Local Network</span> — zero setup. Your phone connects directly to this machine over WiFi. No accounts, no deployment, no cloud. Just click Start and scan the QR code.</li>
+                  <li><span className="font-semibold text-stone-200">Hands Relay</span> — for remote access away from home. Deploy the included relay to Render (free) so your phone can reach the desktop over the internet.</li>
+                  <li><span className="font-semibold text-stone-200">Cloudflare tunnel</span> — alternative to the relay. Uses the <code className="rounded bg-white/8 px-1 py-0.5">cloudflared</code> binary for a direct tunnel.</li>
+                  <li><span className="font-semibold text-stone-200">Pairing</span> — scan the QR code on your phone, enter the pairing code. Both gates must pass before a session is granted.</li>
                 </ol>
               </div>
             </div>

@@ -60,7 +60,7 @@ function App() {
     if (!error) {
       return undefined;
     }
-    const timer = window.setTimeout(() => clearError(), 5000);
+    const timer = window.setTimeout(() => clearError(), 8000);
     return () => window.clearTimeout(timer);
   }, [clearError, error]);
 

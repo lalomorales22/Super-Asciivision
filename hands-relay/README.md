@@ -39,50 +39,18 @@ https://hands.yourdomain.com
 
 ## Deploy On Render
 
-This repository includes a root-level [`render.yaml`](../render.yaml) Blueprint for `hands-relay`.
+### One-Click Deploy
 
-### Step 1 — Pick a unique service name
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/lalomorales22/Super-Asciivision)
 
-Open `render.yaml` in the root of this repo. Find the `name` field near the top:
+This opens Render with the `hands-relay` service pre-configured on the free plan. You just need to:
 
-```yaml
-services:
-  - type: web
-    name: my-asciivision-relay   # <-- change this
-```
+1. **Sign in** to [render.com](https://render.com) (free account works).
+2. **Pick a unique service name** when prompted (e.g. `alex-ascii-relay`). Render turns this into your public URL (`https://<your-name>.onrender.com`). Names are globally unique across all of Render.
+3. **Click Deploy.** Wait for the build to finish.
+4. **Copy your relay URL** from the top of the Render dashboard (e.g. `https://alex-ascii-relay.onrender.com`).
 
-Change `my-asciivision-relay` to something unique to you. Render turns this name into your public URL, so whatever you pick becomes `https://<your-name>.onrender.com`. Names are globally unique across all of Render — if someone else already took a name you'll get an error.
-
-Good examples: `alex-ascii-relay`, `studio42-relay`, `my-hands-relay-2024`
-
-### Step 2 — Fork or push to GitHub
-
-Push your repo (with the updated `render.yaml`) to your own GitHub account. Render needs access to the repo to build from it.
-
-### Step 3 — Create the service on Render
-
-1. Go to [render.com](https://render.com) and sign in (free account works).
-2. Click **New** > **Blueprint** (or **New** > **Web Service**).
-3. Connect your GitHub repo.
-4. If you chose Blueprint, Render auto-detects `render.yaml` and shows the service it will create. Confirm the name matches what you set in Step 1.
-5. If you chose Web Service manually instead:
-   - **Root Directory**: `hands-relay`
-   - **Build Command**: `npm install`
-   - **Start Command**: `npm run start`
-   - **Plan**: Free
-6. Click **Deploy**.
-
-### Step 4 — Copy your relay URL
-
-After the deploy finishes, Render shows your service URL at the top of the dashboard. It looks like:
-
-```text
-https://alex-ascii-relay.onrender.com
-```
-
-Copy this URL — you'll paste it into the app next.
-
-### Step 5 — Connect Super ASCIIVision
+### Connect Super ASCIIVision
 
 1. Open Super ASCIIVision and go to the **Hands** page.
 2. In the **Tunnel Setup** section at the bottom:
@@ -91,6 +59,17 @@ Copy this URL — you'll paste it into the app next.
 3. Click **Save**, then click **Start Hands**.
 4. The status should change to "Hands relay connected" and you'll see a QR code and pairing code.
 5. Scan the QR code on your phone to connect.
+
+<details>
+<summary>Manual setup (fork + Blueprint)</summary>
+
+1. Open `render.yaml` in the root of this repo and change the `name` field to something unique (e.g. `alex-ascii-relay`, `studio42-relay`).
+2. Push your fork to GitHub.
+3. In Render, click **New** > **Blueprint**, connect your repo. Render auto-detects `render.yaml`.
+4. Confirm the service name and click **Apply**.
+5. Copy your Render HTTPS URL after deploy finishes.
+
+</details>
 
 ### Notes
 

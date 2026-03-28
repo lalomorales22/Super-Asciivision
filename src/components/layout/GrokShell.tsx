@@ -39,6 +39,7 @@ type RightPanelMode = "workspace" | "browser";
 
 export function GrokShell() {
   const settingsOpen = useAppStore((state) => state.settingsOpen);
+  const settingsInitialTab = useAppStore((state) => state.settingsInitialTab);
   const toggleSettings = useAppStore((state) => state.toggleSettings);
   const openBrowserPreviewInStore = useTerminalStore((state) => state.openBrowserPreview);
   const [page, setPage] = useState<AppPage>("chat");
@@ -306,7 +307,7 @@ export function GrokShell() {
           ) : null}
         </div>
       </main>
-      {settingsOpen ? <SettingsSheet onClose={() => toggleSettings(false)} /> : null}
+      {settingsOpen ? <SettingsSheet onClose={() => toggleSettings(false)} initialTab={settingsInitialTab as "shell" | "models" | "keys" | "asciivision" | undefined} /> : null}
     </ShellChromeContext.Provider>
   );
 }

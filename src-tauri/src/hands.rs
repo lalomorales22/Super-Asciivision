@@ -45,6 +45,19 @@ const MAX_ACTIVITY_ITEMS: usize = 80;
 const MAX_ASSETS: usize = 40;
 const MAX_CHAT_HISTORY: usize = 24;
 
+/// Detect the LAN IP address by creating a UDP socket and checking which
+/// local address the OS would use to reach an external host. No data is sent.
+fn detect_lan_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let addr = socket.local_addr().ok()?;
+    let ip = addr.ip();
+    if ip.is_loopback() || ip.is_unspecified() {
+        return None;
+    }
+    Some(ip.to_string())
+}
+
 pub struct HandsService {
     runtime: Mutex<Option<HandsRuntime>>,
     db: Database,
@@ -157,7 +170,13 @@ impl HandsService {
         std::fs::create_dir_all(&workspace_dir)?;
         ensure_workspace_readme(&workspace_dir)?;
 
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let is_local_mode = effective_settings
+            .hands_tunnel_provider
+            .as_deref()
+            .unwrap_or("local")
+            == "local";
+        let bind_addr = if is_local_mode { "0.0.0.0:0" } else { "127.0.0.1:0" };
+        let listener = TcpListener::bind(bind_addr).await?;
         let port = listener.local_addr()?.port();
         let local_url = format!("http://127.0.0.1:{port}");
         let pairing_code = random_code(8);
@@ -165,7 +184,7 @@ impl HandsService {
             .hands_tunnel_provider
             .clone()
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "relay".to_string());
+            .unwrap_or_else(|| "local".to_string());
 
         let bridge = Arc::new(HandsBridge {
             app: app.clone(),
@@ -226,7 +245,21 @@ impl HandsService {
             }
         });
 
-        let (tunnel_task, tunnel_child) = if tunnel_provider == "relay" {
+        let (tunnel_task, tunnel_child) = if tunnel_provider == "local" {
+            // Local network mode: no tunnel or relay needed.
+            // Detect the LAN IP and set the public URL directly.
+            let lan_url = detect_lan_ip()
+                .map(|ip| format!("http://{}:{}", ip, port));
+            let status_msg = if lan_url.is_some() {
+                "Local network mode active. Phones on the same WiFi can connect."
+            } else {
+                "Local network mode active but no LAN IP detected. Use localhost."
+            };
+            bridge
+                .set_tunnel_status(lan_url, status_msg, None)
+                .await;
+            (None, None)
+        } else if tunnel_provider == "relay" {
             spawn_relay_client(bridge.clone(), shutdown.clone(), &effective_settings).await
         } else {
             spawn_tunnel_process(bridge.clone(), shutdown.clone(), &local_url, &effective_settings)
@@ -248,7 +281,7 @@ impl HandsService {
         let provider = settings
             .hands_tunnel_provider
             .clone()
-            .unwrap_or_else(|| "relay".to_string());
+            .unwrap_or_else(|| "local".to_string());
         if provider != "relay" {
             return Ok(settings);
         }
@@ -1746,7 +1779,7 @@ fn offline_snapshot(settings: &Settings) -> HandsStatus {
         tunnel_provider: settings
             .hands_tunnel_provider
             .clone()
-            .or_else(|| Some("cloudflare".into())),
+            .or_else(|| Some("local".into())),
         tunnel_executable: settings.hands_tunnel_executable.clone(),
         local_url: None,
         public_url: None,

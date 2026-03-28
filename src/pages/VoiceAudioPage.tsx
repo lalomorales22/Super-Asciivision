@@ -502,31 +502,38 @@ export function VoiceAudioPage({ onShowBrowser }: { onShowBrowser: () => void })
                   placeholder="Realtime instructions"
                   className="min-h-24 rounded-[18px] border border-white/8 bg-black/30 px-3 py-3 text-[11px] leading-5 text-stone-100 outline-none placeholder:text-stone-600 focus:border-emerald-300/30"
                 />
-                <div className="flex items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setRealtimeTalkMode("push")}
-                    className={clsx(
-                      "rounded-xl border px-3 py-1.5 text-[10px] transition",
-                      realtimeTalkMode === "push"
-                        ? "border-sky-300/20 bg-sky-300/12 text-sky-50"
-                        : "border-white/8 bg-white/5 text-stone-400 hover:bg-white/8",
-                    )}
-                  >
-                    Push to Talk
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRealtimeTalkMode("auto")}
-                    className={clsx(
-                      "rounded-xl border px-3 py-1.5 text-[10px] transition",
-                      realtimeTalkMode === "auto"
-                        ? "border-emerald-300/20 bg-emerald-300/12 text-emerald-50"
-                        : "border-white/8 bg-white/5 text-stone-400 hover:bg-white/8",
-                    )}
-                  >
-                    Auto (back & forth)
-                  </button>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setRealtimeTalkMode("push")}
+                      className={clsx(
+                        "rounded-xl border px-3 py-1.5 text-[10px] transition",
+                        realtimeTalkMode === "push"
+                          ? "border-sky-300/20 bg-sky-300/12 text-sky-50"
+                          : "border-white/8 bg-white/5 text-stone-400 hover:bg-white/8",
+                      )}
+                    >
+                      Push to Talk
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRealtimeTalkMode("auto")}
+                      className={clsx(
+                        "rounded-xl border px-3 py-1.5 text-[10px] transition",
+                        realtimeTalkMode === "auto"
+                          ? "border-emerald-300/20 bg-emerald-300/12 text-emerald-50"
+                          : "border-white/8 bg-white/5 text-stone-400 hover:bg-white/8",
+                      )}
+                    >
+                      Auto (hands-free)
+                    </button>
+                  </div>
+                  <p className="text-center text-[9px] leading-4 text-stone-500">
+                    {realtimeTalkMode === "push"
+                      ? "Hold the mic button to speak, release to send. Best for noisy environments."
+                      : "The AI listens continuously and responds when you stop talking. Best for quiet spaces."}
+                  </p>
                 </div>
 
                 <div className="rounded-[22px] border border-white/8 bg-black/30 px-4 py-5">

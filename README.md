@@ -17,7 +17,7 @@ Click the rainbow **ASCIIVISION** button in the nav bar to drop into the termina
 | **IDE** | File explorer, multi-tab code editor with syntax highlighting, AI copilot (xAI or Ollama), Quick Open (Cmd+P), browser preview — opens without a workspace |
 | **Tiles** | 1x2, 2x2, or 3x3 grid of independent PTY terminal sessions |
 | **Music** | Built-in player — MP3/WAV/OGG/FLAC/M4A/AAC/OPUS/WMA, metadata display, hideable mini-player bar, shuffle/repeat, playlist/category sidebar with drag-and-drop import |
-| **Hands** | Mobile bridge — pair your phone, chat and generate media remotely (Render relay or Cloudflare tunnel) |
+| **Hands** | Mobile bridge — pair your phone over WiFi (zero setup) or deploy a relay for remote access. Chat, generate media, and access your workspace from your phone |
 | **Settings** | Theme selector (6 themes), model selection, default Ollama model, voice config, always-on-top, API key management for xAI + ASCIIVision providers |
 
 ### Themes
@@ -79,27 +79,6 @@ The script handles everything: system dependencies (Tauri/WebKit, FFmpeg dev lib
 
 Tested on: Ubuntu 22.04 (NVIDIA Jetson Orin Nano aarch64), Ubuntu 24.04, Fedora, Arch.
 
-#### From a Release (AppImage, .deb, or .rpm)
-
-Download the latest package for your architecture from [Releases](https://github.com/lalomorales22/Super-Asciivision/releases).
-
-**AppImage** (portable, no install needed):
-```bash
-chmod +x Super.ASCIIVision_0.1.4_aarch64.AppImage
-./Super.ASCIIVision_0.1.4_aarch64.AppImage
-```
-> **Note:** Browsers strip the execute permission when downloading files. You must run `chmod +x` before the AppImage will launch.
-
-**Debian/Ubuntu (.deb)**:
-```bash
-sudo dpkg -i Super.ASCIIVision_0.1.4_arm64.deb
-```
-
-**Fedora/RHEL (.rpm)**:
-```bash
-sudo rpm -i Super.ASCIIVision-0.1.4-1.aarch64.rpm
-```
-
 #### Ollama Setup (Local AI)
 
 The app supports **Ollama** for fully local, private AI chat and agent mode. We recommend `qwen3.5:2b` — it supports tool use, vision, and runs well on modest hardware:
@@ -157,11 +136,6 @@ npm run tauri dev
 npm run tauri build
 ```
 
-Install the locally built app:
-
-```bash
-ditto "src-tauri/target/release/bundle/macos/Super ASCIIVision.app" "/Applications/Super ASCIIVision.app"
-```
 
 ### Linux
 
@@ -240,40 +214,62 @@ Open **Settings** in the app and add your API keys for Claude, OpenAI, and Gemin
 
 ## Hands (Mobile Bridge)
 
-Pair your phone for remote access to chat, image/video/audio generation, and local workspace operations. You need a relay server so your phone can reach the desktop app over the internet.
+Pair your phone to chat, generate images/video/audio, and access your workspace remotely. Hands has three modes:
 
-### Deploy the Relay on Render
+### Local Network (default — zero setup)
 
-1. **Pick a unique service name.** Open `render.yaml` in the repo root and change the `name` field to something unique to you (e.g. `alex-ascii-relay`). Render turns this into your public URL (`https://<your-name>.onrender.com`) and names are globally unique — two people cannot share the same name.
-2. **Create a Render account** at [render.com](https://render.com) (free tier works).
-3. **Connect your GitHub** — link the repo (with your updated `render.yaml`) to Render.
-4. **Create a Blueprint:**
-   - From the Render dashboard, click **New** > **Blueprint**.
-   - Select this repository. Render will detect `render.yaml` at the root.
-   - Confirm the service name matches what you set in step 1.
-   - Click **Apply** — this creates the `hands-relay` web service on the free plan.
-5. **Wait for the deploy** to finish. Copy your Render HTTPS URL, e.g.:
-   ```
-   https://alex-ascii-relay.onrender.com
-   ```
-6. **Keep this URL private.** Anyone with it could connect to your relay. Do not share it publicly or commit it to a repo.
+Works instantly when your phone and desktop are on the same WiFi:
 
-### Connect the App
+1. Go to the **Hands** page.
+2. Make sure **Provider** is set to `Local Network`.
+3. Click **Start secure link** — the app detects your LAN IP and generates a QR code.
+4. Scan the QR code on your phone and enter the **pairing code**.
 
-1. In Super ASCIIVision, go to the **Hands** page.
-2. Set **Provider** to `Hands Relay`.
-3. Paste your Render HTTPS URL into the **Relay URL** field.
-4. Click **Start secure link** — the desktop opens a WebSocket to the relay and generates a pairing code.
-5. On your phone, open the relay URL in a browser (e.g., `https://alex-ascii-relay.onrender.com`).
-6. Enter the **pairing code** shown in the app. Once paired, you can chat, generate images/video/audio, and browse workspace files from your phone.
+No accounts, no deployment, no cloud services. All traffic stays on your local network.
+
+### Remote Access via Relay
+
+When you need access away from home, deploy the included relay server:
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/lalomorales22/Super-Asciivision)
+
+1. **Sign in** to [render.com](https://render.com) (free account works).
+2. **Pick a unique service name** when prompted (e.g. `alex-ascii-relay`). Render turns this into your public URL.
+3. **Click Deploy.** Copy your HTTPS URL from the Render dashboard.
+4. In the app, switch **Provider** to `Hands Relay`, paste the URL, and click **Start secure link**.
+
+> **Keep this URL private.** Anyone with it could connect to your relay.
+
+<details>
+<summary>Manual setup (fork + Blueprint)</summary>
+
+1. Open `render.yaml` in the repo root and change the `name` field to something unique.
+2. Push your fork to GitHub.
+3. In Render, click **New** > **Blueprint**, connect your repo. Render auto-detects `render.yaml`.
+4. Confirm the name and click **Apply**.
+5. Copy your Render HTTPS URL after deploy finishes.
+
+</details>
 
 ### Security Notes
 
-- **Always deploy your own relay instance** — do not use someone else's relay, since all traffic passes through it.
-- The relay authenticates desktop connections with a token and phone connections with a one-time pairing code.
-- Render provides HTTPS and WSS automatically — traffic between your phone and the relay is encrypted in transit.
-- Free-tier Render services sleep after inactivity. The first phone request after idle may take 30–60 seconds to wake up.
+- **Local Network mode** keeps all traffic on your WiFi — nothing leaves your network.
+- **Relay mode**: always deploy your own relay instance. The relay authenticates desktop connections with a token and phone connections with a one-time pairing code.
+- Render provides HTTPS and WSS automatically. Free-tier services sleep after inactivity (30–60s wake-up).
 - Optionally set the `HANDS_PUBLIC_BASE_URL` environment variable in Render if you attach a custom domain.
+
+---
+
+## API Documentation
+
+The `docs/` directory contains a self-contained PHP app with the full API reference, development history, and an AI chat assistant powered by Ollama:
+
+```bash
+cd docs
+php -S localhost:8000
+```
+
+Then open [localhost:8000](http://localhost:8000). The AI assistant requires Ollama running locally and can answer questions about every Tauri command, type, and module in the codebase.
 
 ---
 
