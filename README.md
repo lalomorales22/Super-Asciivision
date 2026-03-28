@@ -1,4 +1,5 @@
 # Super ASCIIVision
+<img width="1536" height="1024" alt="super-asciivision" src="https://github.com/user-attachments/assets/e70e3836-093e-44b0-9ec6-07241a0ea04a" />
 
 A cross-platform desktop app combining an **AI-powered GUI shell** (chat with xAI and Ollama, image/video generation, voice, IDE, terminal tiles, music player, mobile bridge) with **ASCIIVision** (a full terminal experience — multi-AI chat, ASCII video, webcam, 3D effects, games, system monitoring).
 
