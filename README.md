@@ -79,6 +79,27 @@ The script handles everything: system dependencies (Tauri/WebKit, FFmpeg dev lib
 
 Tested on: Ubuntu 22.04 (NVIDIA Jetson Orin Nano aarch64), Ubuntu 24.04, Fedora, Arch.
 
+#### From a Release (AppImage, .deb, or .rpm)
+
+Download the latest package for your architecture from [Releases](https://github.com/lalomorales22/Super-Asciivision/releases).
+
+**AppImage** (portable, no install needed):
+```bash
+chmod +x Super.ASCIIVision_0.1.4_aarch64.AppImage
+./Super.ASCIIVision_0.1.4_aarch64.AppImage
+```
+> **Note:** Browsers strip the execute permission when downloading files. You must run `chmod +x` before the AppImage will launch.
+
+**Debian/Ubuntu (.deb)**:
+```bash
+sudo dpkg -i Super.ASCIIVision_0.1.4_arm64.deb
+```
+
+**Fedora/RHEL (.rpm)**:
+```bash
+sudo rpm -i Super.ASCIIVision-0.1.4-1.aarch64.rpm
+```
+
 #### Ollama Setup (Local AI)
 
 The app supports **Ollama** for fully local, private AI chat and agent mode. We recommend `qwen3.5:2b` — it supports tool use, vision, and runs well on modest hardware:
