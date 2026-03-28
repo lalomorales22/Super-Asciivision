@@ -57,15 +57,6 @@ cd Super-Asciivision
 
 The script checks for prerequisites (Xcode CLI Tools, Homebrew, Node.js 20+, Rust, FFmpeg, LLVM, pkg-config, yt-dlp), installs anything missing, builds both apps, and copies the bundle into `/Applications`.
 
-#### From a Release DMG
-
-1. Download the latest `.dmg` from [Releases](https://github.com/lalomorales22/Super-Asciivision/releases).
-2. Drag `Super ASCIIVision.app` into `Applications`.
-3. First launch requires clearing the quarantine flag (app is not code-signed yet):
-   ```bash
-   xattr -cr "/Applications/Super ASCIIVision.app"
-   ```
-   Then right-click the app and choose **Open**. After this one-time step it opens normally.
 
 ### Linux (Ubuntu/Debian, Fedora, Arch, openSUSE)
 
