@@ -17,7 +17,7 @@ Click the rainbow **ASCIIVISION** button in the nav bar to drop into the termina
 | **Image & Video** | Image and video generation via xAI or locally with Ollama (FLUX models), category-organized gallery |
 | **Voice & Audio** | Text-to-speech generation and live realtime voice chat |
 | **Media Editor** | Timeline-based export workflow via ffmpeg |
-| **IDE** | File explorer, multi-tab code editor with syntax highlighting, AI copilot (xAI or Ollama), Quick Open (Cmd+P), browser preview — opens without a workspace |
+| **IDE** | File explorer with right-click context menu (new file, rename, delete, open in terminal), multi-tab code editor with syntax highlighting, AI copilot (xAI or Ollama), Quick Open (Cmd+P), browser preview — opens without a workspace |
 | **Tiles** | 1x2, 2x2, or 3x3 grid of independent PTY terminal sessions |
 | **Music** | Built-in player — MP3/WAV/OGG/FLAC/M4A/AAC/OPUS/WMA, metadata display, hideable mini-player bar, shuffle/repeat, playlist/category sidebar with drag-and-drop import |
 | **Hands** | Mobile bridge — pair your phone over WiFi (zero setup) or deploy a relay for remote access. Chat, generate media, and access your workspace from your phone |
@@ -39,12 +39,35 @@ Switch themes in **Settings** — changes apply instantly with live preview. The
 | **Agentic Tools** | Shell commands, file I/O, codebase search, HTTP requests, system queries |
 | **ASCII Video** | MP4 and YouTube decoded to real-time colored ASCII art via FFmpeg |
 | **Live Webcam** | Camera feed as ASCII art in real-time (F5) |
-| **Video Chat** | WebSocket-based multi-user live ASCII video rooms |
+| **Video Chat** | WebSocket-based multi-user live ASCII video rooms — `/server <port>` to host, `/connect <ip>:<port>` to join |
 | **3D Effects** | Matrix rain, plasma, starfield, wireframe cube, fire, particle storms (F4) |
-| **Tiling** | PTY-backed terminals in 1–8 way grids with Ctrl+WASD focus/swap (F6/F7) |
+| **Tiling** | PTY-backed terminals in 1–8 way grids with Ctrl+WASD focus/swap (F6/F7), Ctrl+C forwards to shell |
 | **Games** | Pac-Man, Space Invaders, 3D Penguin |
 | **System Monitor** | CPU, memory, swap, network I/O, load average, per-core sparklines |
 | **Themes** | F9 cycles through color themes, F10 resets |
+
+### Video Chat
+
+Host or join a multi-user ASCII video chat room over the local network (or any reachable address).
+
+**Host a room:**
+```
+/server 8000
+```
+Binds to `0.0.0.0:<port>` — any machine on the network can connect.
+
+**Join a room:**
+```
+/connect 192.168.1.100:8000
+```
+The `ws://` prefix is added automatically. You can also use the full URL: `/connect ws://192.168.1.100:8000`.
+
+**Chat inside a room:**
+```
+/chat hello everyone
+```
+
+Each connected user's webcam feed is encoded as colored ASCII art and streamed over WebSocket in real time. The video feeds panel shows a tiled grid of all participants. The connected-users panel shows who's online.
 
 ---
 
