@@ -34,7 +34,7 @@ impl VideoChatClient {
             remote_frames: Arc::new(RwLock::new(HashMap::new())),
             chat_messages: Arc::new(RwLock::new(Vec::new())),
             connected: Arc::new(RwLock::new(false)),
-            status: Arc::new(RwLock::new("disconnected".to_string())),
+            status: Arc::new(RwLock::new("pending".to_string())),
             chat_tx,
             chat_rx: Arc::new(Mutex::new(chat_rx)),
             frame_tx,
