@@ -1,6 +1,6 @@
 use crate::message::WsMessage;
 use crate::video::AsciiFrame;
-use crate::webcam::{ascii_frame_to_ws, ws_frame_to_ascii, WebcamCapture, WebcamConfig};
+use crate::webcam::{ascii_frame_to_ws, ws_frame_to_ascii};
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use parking_lot::RwLock;
@@ -14,33 +14,42 @@ pub struct VideoChatClient {
     pub server_url: String,
     pub connected_users: Arc<RwLock<Vec<String>>>,
     pub remote_frames: Arc<RwLock<HashMap<String, (String, AsciiFrame)>>>,
-    pub local_frame: Arc<RwLock<Option<AsciiFrame>>>,
     pub chat_messages: Arc<RwLock<Vec<(String, String)>>>,
     pub connected: Arc<RwLock<bool>>,
     pub status: Arc<RwLock<String>>,
     chat_tx: mpsc::UnboundedSender<String>,
     chat_rx: Arc<Mutex<mpsc::UnboundedReceiver<String>>>,
+    frame_tx: mpsc::UnboundedSender<AsciiFrame>,
+    frame_rx: Arc<Mutex<mpsc::UnboundedReceiver<AsciiFrame>>>,
 }
 
 impl VideoChatClient {
     pub fn new(username: String, server_url: String) -> Self {
         let (chat_tx, chat_rx) = mpsc::unbounded_channel();
+        let (frame_tx, frame_rx) = mpsc::unbounded_channel();
         Self {
             username,
             server_url,
             connected_users: Arc::new(RwLock::new(Vec::new())),
             remote_frames: Arc::new(RwLock::new(HashMap::new())),
-            local_frame: Arc::new(RwLock::new(None)),
             chat_messages: Arc::new(RwLock::new(Vec::new())),
             connected: Arc::new(RwLock::new(false)),
             status: Arc::new(RwLock::new("disconnected".to_string())),
             chat_tx,
             chat_rx: Arc::new(Mutex::new(chat_rx)),
+            frame_tx,
+            frame_rx: Arc::new(Mutex::new(frame_rx)),
         }
     }
 
     pub fn send_chat(&self, content: String) {
         let _ = self.chat_tx.send(content);
+    }
+
+    /// Push a webcam frame for transmission to the server.
+    /// Called by the app's tick loop with the existing F5 webcam frame.
+    pub fn send_frame(&self, frame: &AsciiFrame) {
+        let _ = self.frame_tx.send(frame.clone());
     }
 
     pub fn is_connected(&self) -> bool {
@@ -62,11 +71,11 @@ impl VideoChatClient {
         let username = self.username.clone();
         let connected_users = Arc::clone(&self.connected_users);
         let remote_frames = Arc::clone(&self.remote_frames);
-        let local_frame = Arc::clone(&self.local_frame);
         let chat_messages = Arc::clone(&self.chat_messages);
         let connected = Arc::clone(&self.connected);
         let status = Arc::clone(&self.status);
         let chat_rx = Arc::clone(&self.chat_rx);
+        let frame_rx = Arc::clone(&self.frame_rx);
 
         async move {
             *status.write() = format!("connecting to {}", server_url);
@@ -86,8 +95,6 @@ impl VideoChatClient {
                 tx.send(TungsteniteMsg::Text(serde_json::to_string(&join_msg)?))
                     .await?;
             }
-
-            let webcam = WebcamCapture::start(WebcamConfig::default()).ok();
 
             // -- receive task --
             let connected_users_rx = Arc::clone(&connected_users);
@@ -163,34 +170,27 @@ impl VideoChatClient {
                 *status_rx.write() = "disconnected".to_string();
             });
 
-            // -- webcam send task --
-            let ws_tx_cam = Arc::clone(&ws_tx);
-            let local_frame_cam = Arc::clone(&local_frame);
-            let username_cam = username.clone();
+            // -- frame send task (fed by app's webcam via send_frame) --
+            let ws_tx_frame = Arc::clone(&ws_tx);
+            let username_frame = username.clone();
 
-            if webcam.is_some() {
-                tokio::spawn(async move {
-                    let cam = webcam.unwrap();
-                    loop {
-                        if let Some(frame) = cam.try_recv() {
-                            *local_frame_cam.write() = Some(frame.clone());
-                            let ws_frame = ascii_frame_to_ws(&frame);
-                            let msg = WsMessage::Frame {
-                                user_id: String::new(),
-                                username: username_cam.clone(),
-                                frame: ws_frame,
-                            };
-                            if let Ok(json) = serde_json::to_string(&msg) {
-                                let mut tx = ws_tx_cam.lock().await;
-                                if tx.send(TungsteniteMsg::Text(json)).await.is_err() {
-                                    break;
-                                }
-                            }
+            tokio::spawn(async move {
+                let mut rx = frame_rx.lock().await;
+                while let Some(frame) = rx.recv().await {
+                    let ws_frame = ascii_frame_to_ws(&frame);
+                    let msg = WsMessage::Frame {
+                        user_id: String::new(),
+                        username: username_frame.clone(),
+                        frame: ws_frame,
+                    };
+                    if let Ok(json) = serde_json::to_string(&msg) {
+                        let mut tx = ws_tx_frame.lock().await;
+                        if tx.send(TungsteniteMsg::Text(json)).await.is_err() {
+                            break;
                         }
-                        tokio::time::sleep(tokio::time::Duration::from_millis(33)).await;
                     }
-                });
-            }
+                }
+            });
 
             // -- chat send task --
             let ws_tx_chat = Arc::clone(&ws_tx);

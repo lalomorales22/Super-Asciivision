@@ -903,6 +903,13 @@ impl App {
             }
         }
 
+        // feed webcam frames to video chat for transmission
+        if let Some(ref vc) = self.video_chat {
+            if let Some(ref frame) = self.webcam_frame {
+                vc.send_frame(frame);
+            }
+        }
+
         while let Ok(event) = self.events_rx.try_recv() {
             match event {
                 AppEvent::AiFinished { session_id, result } => {
@@ -1874,6 +1881,23 @@ impl App {
                         eprintln!("server error: {}", e);
                     }
                 });
+                // auto-join the local server
+                let local_url = format!("ws://127.0.0.1:{}", port);
+                let username = self.username.clone();
+                let client = VideoChatClient::new(username.clone(), local_url);
+                self.add_system_message(format!("joining room as {}", username));
+                let status_arc = client.status.clone();
+                let fut = client.connect_future();
+                self.video_chat = Some(client);
+                tokio::spawn(async move {
+                    // brief delay so the server can bind first
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                    if let Err(e) = fut.await {
+                        *status_arc.write() = format!("connection failed: {}", e);
+                    }
+                });
+                self.ensure_webcam_for_videochat();
+                self.tiling.set_focused_panel(PanelKind::VideoChatFeeds);
                 self.status_note = format!("video chat server live on :{}", port);
             } else {
                 self.add_system_message("usage: /server <port>");
@@ -1907,6 +1931,7 @@ impl App {
                     *status_arc.write() = format!("connection failed: {}", e);
                 }
             });
+            self.ensure_webcam_for_videochat();
             self.tiling.set_focused_panel(PanelKind::VideoChatFeeds);
             self.status_note = "video chat connecting...".to_string();
             return;
@@ -2134,6 +2159,24 @@ impl App {
             width: w,
             height: h,
             ..webcam::WebcamConfig::default()
+        }
+    }
+
+    fn ensure_webcam_for_videochat(&mut self) {
+        if self.webcam.is_none() {
+            let config = self.webcam_config();
+            match WebcamCapture::start(config) {
+                Ok(cam) => {
+                    self.webcam = Some(cam);
+                    self.add_system_message("webcam started for video chat");
+                }
+                Err(e) => {
+                    self.add_system_message(format!(
+                        "webcam failed to start: {} — video chat will work without camera",
+                        e
+                    ));
+                }
+            }
         }
     }
 
@@ -3119,25 +3162,22 @@ impl App {
 
         if let Some(ref vc) = self.video_chat {
             let remote = vc.remote_frames.read();
-            let local = vc.local_frame.read();
 
-            // build combined feed list: (label, frame_ref, is_self)
-            let mut feeds: Vec<(String, &AsciiFrame, bool)> = Vec::new();
-            if let Some(ref lf) = *local {
-                feeds.push((format!("{} (you)", self.username), lf, true));
-            }
-            for (_uid, (uname, af)) in remote.iter() {
-                feeds.push((uname.clone(), af, false));
-            }
-
-            if feeds.is_empty() {
+            if remote.is_empty() {
+                let msg = if vc.is_connected() {
+                    "connected — waiting for other participants..."
+                } else {
+                    "waiting for video feeds..."
+                };
                 frame.render_widget(
-                    Paragraph::new("waiting for video feeds...")
+                    Paragraph::new(msg)
                         .style(Style::default().fg(t().muted).bg(t().panel_bg))
                         .alignment(Alignment::Center),
                     inner,
                 );
             } else {
+                let feeds: Vec<(&str, &AsciiFrame)> =
+                    remote.values().map(|(u, f)| (u.as_str(), f)).collect();
                 let count = feeds.len().min(4);
                 let cols = if count <= 2 { count } else { 2 };
                 let rows = (count + cols - 1) / cols;
@@ -3161,15 +3201,15 @@ impl App {
                         .split(row_layout[r]);
 
                     for c in 0..cols {
-                        if let Some((label, ascii_frame, is_self)) = feed_iter.next() {
+                        if let Some((uname, ascii_frame)) = feed_iter.next() {
                             let cell_area = col_layout[c];
                             render_ascii_frame(frame.buffer_mut(), cell_area, ascii_frame, 0.85);
                             render_gradient_text_clipped(
                                 frame.buffer_mut(),
                                 cell_area.x + 1,
                                 cell_area.y,
-                                label,
-                                if *is_self { t().accent3 } else { t().accent4 },
+                                uname,
+                                t().accent4,
                                 t().text,
                                 Some(cell_area.x + cell_area.width),
                             );
