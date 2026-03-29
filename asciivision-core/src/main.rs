@@ -1249,6 +1249,7 @@ impl App {
                 Event::Key(key) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL)
                         && key.code == KeyCode::Char('c')
+                        && self.mode != AppMode::Chat
                     {
                         self.mode = AppMode::Exit;
                         return Ok(true);
@@ -1339,6 +1340,12 @@ impl App {
         {
             self.status_note = self.tiles.status_note().to_string();
             return Ok(false);
+        }
+
+        // Ctrl+C exits the app unless tiles/games already consumed it above
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            self.mode = AppMode::Exit;
+            return Ok(true);
         }
 
         match key.code {
@@ -1858,17 +1865,21 @@ impl App {
             return;
         }
 
-        if let Some(url) = input.strip_prefix("/connect ") {
-            let url = url.trim().to_string();
+        if let Some(raw) = input.strip_prefix("/connect ") {
+            let raw = raw.trim();
+            let url = if raw.starts_with("ws://") || raw.starts_with("wss://") {
+                raw.to_string()
+            } else {
+                format!("ws://{}", raw)
+            };
             let username = self.username.clone();
             let client = VideoChatClient::new(username.clone(), url.clone());
             self.add_system_message(format!("connecting to {} as {}", url, username));
             let status_arc = client.status.clone();
+            let fut = client.connect_future();
             self.video_chat = Some(client);
-            // spawn connection using a fresh client that will manage its own Arc state
             tokio::spawn(async move {
-                let temp_client = VideoChatClient::new(username, url);
-                if let Err(e) = temp_client.connect().await {
+                if let Err(e) = fut.await {
                     *status_arc.write() = format!("connection failed: {}", e);
                 }
             });

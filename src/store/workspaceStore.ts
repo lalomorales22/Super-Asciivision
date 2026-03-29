@@ -182,10 +182,14 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   scanWorkspace: async (workspaceId) => {
     set({ scanningWorkspaceId: workspaceId });
-    await api.scanWorkspace(workspaceId);
-    const workspaces = await api.listWorkspaces();
-    set({ workspaces });
-    await get().selectWorkspace(workspaceId);
+    try {
+      await api.scanWorkspace(workspaceId);
+      const workspaces = await api.listWorkspaces();
+      set({ workspaces });
+      await get().selectWorkspace(workspaceId);
+    } finally {
+      set({ scanningWorkspaceId: undefined });
+    }
   },
 
   toggleWorkspaceItem: (itemId) =>

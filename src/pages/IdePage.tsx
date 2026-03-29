@@ -186,6 +186,11 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
   >([]);
   const assistantStreamRef = useRef<string | null>(null);
   const [contextMenu, setContextMenu] = useState<IdeContextMenuState>();
+  const [promptConfig, setPromptConfig] = useState<{
+    label: string;
+    value: string;
+    resolve: (value: string | null) => void;
+  } | null>(null);
   const [ideLeftWidth, setIdeLeftWidth] = useState(240);
   const [ideRightWidth, setIdeRightWidth] = useState(340);
   const [ideViewportWidth, setIdeViewportWidth] = useState(() => window.innerWidth);
@@ -365,6 +370,14 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
     };
   }, [contextMenu]);
 
+  const showPrompt = useCallback(
+    (label: string, defaultValue: string): Promise<string | null> =>
+      new Promise((resolve) => {
+        setPromptConfig({ label, value: defaultValue, resolve });
+      }),
+    [],
+  );
+
   // Keyboard shortcuts: Cmd+S save, Cmd+P quick open
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
@@ -464,7 +477,7 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
       return;
     }
 
-    const nextName = window.prompt("New file name", "new-file.ts")?.trim();
+    const nextName = (await showPrompt("New file name", "new-file.ts"))?.trim();
     if (!nextName) {
       return;
     }
@@ -493,7 +506,7 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
       return;
     }
 
-    const nextName = window.prompt(`Rename ${node.kind}`, node.name)?.trim();
+    const nextName = (await showPrompt(`Rename ${node.kind}`, node.name))?.trim();
     if (!nextName || nextName === node.name) {
       return;
     }
@@ -602,7 +615,7 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
       defaultName = relDir ? `${relDir}new-file.ts` : "new-file.ts";
     }
 
-    const fileName = window.prompt("File path (relative to workspace root)", defaultName)?.trim();
+    const fileName = (await showPrompt("File path (relative to workspace root)", defaultName))?.trim();
     if (!fileName) return;
 
     const newPath = `${root.replace(/\/+$/, "")}/${fileName.replace(/^\/+/, "")}`;
@@ -1505,6 +1518,62 @@ export function IdePage({ onShowBrowser }: { onShowBrowser: () => void }) {
             <Trash2 className="h-3.5 w-3.5" />
             Delete
           </button>
+        </div>
+      ) : null}
+
+      {promptConfig ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+          onPointerDown={() => {
+            promptConfig.resolve(null);
+            setPromptConfig(null);
+          }}
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              promptConfig.resolve(promptConfig.value.trim() || null);
+              setPromptConfig(null);
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="w-80 rounded-2xl border border-white/10 bg-[#0e0f11] p-5 shadow-2xl"
+          >
+            <label className="mb-2 block text-xs font-medium text-stone-300">
+              {promptConfig.label}
+            </label>
+            <input
+              autoFocus
+              value={promptConfig.value}
+              onChange={(e) =>
+                setPromptConfig((s) => (s ? { ...s, value: e.target.value } : null))
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  promptConfig.resolve(null);
+                  setPromptConfig(null);
+                }
+              }}
+              className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 font-['IBM_Plex_Mono'] text-[11px] text-stone-100 outline-none focus:border-emerald-400/30"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  promptConfig.resolve(null);
+                  setPromptConfig(null);
+                }}
+                className="rounded-xl px-3 py-1.5 text-[10px] text-stone-400 transition hover:text-stone-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="rounded-xl bg-emerald-500/20 px-3 py-1.5 text-[10px] text-emerald-200 transition hover:bg-emerald-500/30"
+              >
+                OK
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
     </section>
