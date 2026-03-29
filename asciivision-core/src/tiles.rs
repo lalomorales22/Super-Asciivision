@@ -239,9 +239,19 @@ impl TerminalSession {
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         command.env("ASCIIVISION_TILE", index.to_string());
-        if let Ok(cwd) = env::current_dir() {
-            command.cwd(cwd);
-        }
+        let home = env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .ok()
+            .filter(|p| p.is_dir());
+        let cwd = env::current_dir().ok();
+        // Prefer HOME when the working dir is inside an app bundle (Resources/)
+        let start_dir = match (&home, &cwd) {
+            (Some(h), Some(c)) if c.to_string_lossy().contains("/Resources") => h.clone(),
+            (_, Some(c)) => c.clone(),
+            (Some(h), None) => h.clone(),
+            _ => std::path::PathBuf::from("/"),
+        };
+        command.cwd(start_dir);
 
         let child = pair
             .slave
