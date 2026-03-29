@@ -13,7 +13,7 @@ pub struct VideoChatClient {
     pub username: String,
     pub server_url: String,
     pub connected_users: Arc<RwLock<Vec<String>>>,
-    pub remote_frames: Arc<RwLock<HashMap<String, AsciiFrame>>>,
+    pub remote_frames: Arc<RwLock<HashMap<String, (String, AsciiFrame)>>>,
     pub local_frame: Arc<RwLock<Option<AsciiFrame>>>,
     pub chat_messages: Arc<RwLock<Vec<(String, String)>>>,
     pub connected: Arc<RwLock<bool>>,
@@ -113,12 +113,14 @@ impl VideoChatClient {
                                             format!("{} users online", guard.len());
                                     }
                                     WsMessage::Frame {
+                                        user_id: frame_uid,
                                         username: frame_user,
                                         frame,
-                                        ..
                                     } => {
                                         let ascii = ws_frame_to_ascii(&frame);
-                                        remote_frames_rx.write().insert(frame_user, ascii);
+                                        remote_frames_rx
+                                            .write()
+                                            .insert(frame_uid, (frame_user, ascii));
                                     }
                                     WsMessage::Chat {
                                         username: chat_user,
@@ -139,12 +141,15 @@ impl VideoChatClient {
                                             format!("{} joined", joined),
                                         ));
                                     }
-                                    WsMessage::UserLeft { username: left, .. } => {
+                                    WsMessage::UserLeft {
+                                        user_id: left_uid,
+                                        username: left,
+                                    } => {
                                         chat_messages_rx.write().push((
                                             "SYSTEM".to_string(),
                                             format!("{} left", left),
                                         ));
-                                        remote_frames_rx.write().remove(&left);
+                                        remote_frames_rx.write().remove(&left_uid);
                                     }
                                     _ => {}
                                 }

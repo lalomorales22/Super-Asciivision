@@ -73,11 +73,11 @@ impl VideoChatServer {
                                     WsMessage::Frame { frame, .. } => {
                                         if let Some(ref uid) = user_id {
                                             let uname = self.users.read().get(uid).map(|u| u.username.clone()).unwrap_or_default();
-                                            self.broadcast_all(&WsMessage::Frame {
+                                            self.broadcast_except(&WsMessage::Frame {
                                                 user_id: uid.clone(),
                                                 username: uname,
                                                 frame,
-                                            })?;
+                                            }, user_id.as_deref())?;
                                         }
                                     }
                                     WsMessage::Chat { content, .. } => {

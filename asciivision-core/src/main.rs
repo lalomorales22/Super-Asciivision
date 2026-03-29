@@ -53,7 +53,7 @@ use sysmon::SystemMonitor;
 use tiling::{LayoutPreset, PanelKind, TilingManager};
 use tiles::TilesPanel;
 use tools::{ToolCall, ToolResult, TrustLevel};
-use video::VideoPlayer;
+use video::{AsciiFrame, VideoPlayer};
 use theme::t;
 use webcam::WebcamCapture;
 
@@ -3118,29 +3118,27 @@ impl App {
         });
 
         if let Some(ref vc) = self.video_chat {
-            let frames = vc.remote_frames.read();
-            if frames.is_empty() {
-                if let Some(ref local) = *vc.local_frame.read() {
-                    render_ascii_frame(frame.buffer_mut(), inner, local, 0.9);
-                    render_gradient_text_clipped(
-                        frame.buffer_mut(),
-                        inner.x + 1,
-                        inner.y,
-                        &format!("{} (you)", self.username),
-                        t().accent4,
-                        t().text,
-                        Some(inner.x + inner.width),
-                    );
-                } else {
-                    frame.render_widget(
-                        Paragraph::new("waiting for video feeds...")
-                            .style(Style::default().fg(t().muted).bg(t().panel_bg))
-                            .alignment(Alignment::Center),
-                        inner,
-                    );
-                }
+            let remote = vc.remote_frames.read();
+            let local = vc.local_frame.read();
+
+            // build combined feed list: (label, frame_ref, is_self)
+            let mut feeds: Vec<(String, &AsciiFrame, bool)> = Vec::new();
+            if let Some(ref lf) = *local {
+                feeds.push((format!("{} (you)", self.username), lf, true));
+            }
+            for (_uid, (uname, af)) in remote.iter() {
+                feeds.push((uname.clone(), af, false));
+            }
+
+            if feeds.is_empty() {
+                frame.render_widget(
+                    Paragraph::new("waiting for video feeds...")
+                        .style(Style::default().fg(t().muted).bg(t().panel_bg))
+                        .alignment(Alignment::Center),
+                    inner,
+                );
             } else {
-                let count = frames.len().min(4);
+                let count = feeds.len().min(4);
                 let cols = if count <= 2 { count } else { 2 };
                 let rows = (count + cols - 1) / cols;
 
@@ -3152,7 +3150,7 @@ impl App {
                     .constraints(row_constraints)
                     .split(inner);
 
-                let mut frame_iter = frames.iter();
+                let mut feed_iter = feeds.iter();
                 for r in 0..rows {
                     let col_constraints: Vec<Constraint> = (0..cols)
                         .map(|_| Constraint::Percentage((100 / cols) as u16))
@@ -3163,21 +3161,15 @@ impl App {
                         .split(row_layout[r]);
 
                     for c in 0..cols {
-                        if let Some((uname, ascii_frame)) = frame_iter.next() {
+                        if let Some((label, ascii_frame, is_self)) = feed_iter.next() {
                             let cell_area = col_layout[c];
                             render_ascii_frame(frame.buffer_mut(), cell_area, ascii_frame, 0.85);
-                            let is_self = uname == &self.username;
-                            let label = if is_self {
-                                format!("{} (you)", uname)
-                            } else {
-                                uname.clone()
-                            };
                             render_gradient_text_clipped(
                                 frame.buffer_mut(),
                                 cell_area.x + 1,
                                 cell_area.y,
-                                &label,
-                                if is_self { t().accent3 } else { t().accent4 },
+                                label,
+                                if *is_self { t().accent3 } else { t().accent4 },
                                 t().text,
                                 Some(cell_area.x + cell_area.width),
                             );
