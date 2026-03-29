@@ -875,6 +875,22 @@ impl App {
             self.sysmon.refresh();
         }
 
+        // reflect video-chat connection status so the user sees errors / live state
+        if let Some(ref vc) = self.video_chat {
+            let st = vc.get_status();
+            if st.starts_with("connection failed") {
+                self.add_system_message(st.clone());
+                self.status_note = st;
+                self.video_chat = None;
+            } else if vc.is_connected() && self.status_note == "video chat connecting..." {
+                self.status_note = format!("video chat live — {}", st);
+            } else if !vc.is_connected() && st == "disconnected" {
+                self.add_system_message("video chat disconnected".to_string());
+                self.status_note = "video chat disconnected".to_string();
+                self.video_chat = None;
+            }
+        }
+
         // poll webcam -- drain all buffered frames to keep latency low
         if let Some(ref cam) = self.webcam {
             while let Some(frame) = cam.try_recv() {
@@ -1867,11 +1883,19 @@ impl App {
 
         if let Some(raw) = input.strip_prefix("/connect ") {
             let raw = raw.trim();
-            let url = if raw.starts_with("ws://") || raw.starts_with("wss://") {
-                raw.to_string()
-            } else {
-                format!("ws://{}", raw)
-            };
+            // normalise: strip any partial/full ws(s) prefix, then re-add ws://
+            let stripped = raw
+                .strip_prefix("wss://")
+                .or_else(|| raw.strip_prefix("ws://"))
+                .or_else(|| raw.strip_prefix("wss:"))
+                .or_else(|| raw.strip_prefix("ws:"))
+                .unwrap_or(raw);
+            let stripped = stripped.trim_start_matches('/');
+            if stripped.is_empty() {
+                self.add_system_message("usage: /connect <ip>:<port>");
+                return;
+            }
+            let url = format!("ws://{}", stripped);
             let username = self.username.clone();
             let client = VideoChatClient::new(username.clone(), url.clone());
             self.add_system_message(format!("connecting to {} as {}", url, username));

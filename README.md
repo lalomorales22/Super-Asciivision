@@ -56,11 +56,11 @@ Host or join a multi-user ASCII video chat room over the local network (or any r
 ```
 Binds to `0.0.0.0:<port>` — any machine on the network can connect.
 
-**Join a room:**
+**Join a room** (use the IP of the machine running `/server`):
 ```
 /connect 192.168.1.100:8000
 ```
-The `ws://` prefix is added automatically. You can also use the full URL: `/connect ws://192.168.1.100:8000`.
+Any format works — `192.168.1.100:8000`, `ws://192.168.1.100:8000`, or `ws:192.168.1.100:8000` are all normalised automatically.
 
 **Chat inside a room:**
 ```
