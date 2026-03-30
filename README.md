@@ -1,5 +1,7 @@
 # Super ASCIIVision
-<img width="1536" height="1024" alt="super-asciivision" src="https://github.com/user-attachments/assets/e70e3836-093e-44b0-9ec6-07241a0ea04a" />
+<img width="1437" height="868" alt="Screenshot 2026-03-29 at 10 45 18 PM" src="https://github.com/user-attachments/assets/b1b7d33a-9a4f-4658-b93b-3a6961fafb52" />
+<img width="1436" height="870" alt="Screenshot 2026-03-29 at 10 44 47 PM" src="https://github.com/user-attachments/assets/4a5a060e-37d9-42b7-bff2-fab8ec113c00" />
+
 
 X Community : https://x.com/i/communities/2037938743798378894
 
