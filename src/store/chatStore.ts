@@ -22,6 +22,11 @@ interface ChatState {
   sending: boolean;
   activeStreamId?: string;
   agentMode: boolean;
+  /** Accumulated reasoning/thinking text from xAI reasoning models. */
+  reasoningText: string;
+  /** Whether the reasoning panel is expanded by the user. */
+  reasoningExpanded: boolean;
+  agentThinking?: { message: string; phase?: string };
   agentToolCalls: Array<{
     toolName: string;
     args: string;
@@ -29,6 +34,24 @@ interface ChatState {
     success?: boolean;
     isRunning: boolean;
   }>;
+  subAgents: Array<{
+    agentId: string;
+    label: string;
+    status: "running" | "complete" | "error";
+    summary?: string;
+  }>;
+  agentProgress?: {
+    iteration: number;
+    maxIterations: number;
+    elapsedMs: number;
+  };
+  /** Pending permission request the user needs to approve/deny */
+  pendingApproval?: {
+    callId: string;
+    toolName: string;
+    toolArgs: string;
+    reason: string;
+  };
   refreshConversations: () => Promise<void>;
   setComposer: (value: string) => void;
   loadConversation: (conversationId: string) => Promise<void>;
@@ -41,7 +64,10 @@ interface ChatState {
   toggleAgentMode: () => void;
   stopStream: () => Promise<void>;
   handleStreamEvent: (event: StreamEvent) => void;
+  handleReasoningEvent: (text: string) => void;
+  toggleReasoningExpanded: () => void;
   handleAgentEvent: (event: AgentEvent) => void;
+  respondToApproval: (approved: boolean) => Promise<void>;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -49,7 +75,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   composer: "",
   sending: false,
   agentMode: false,
+  reasoningText: "",
+  reasoningExpanded: false,
   agentToolCalls: [],
+  subAgents: [],
 
   refreshConversations: async () => {
     const conversations = await api.listConversations();
@@ -61,7 +90,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadConversation: async (conversationId) => {
     const detail = await api.loadConversation(conversationId);
     set({ activeConversation: detail });
-    useWorkspaceStore.setState({ activeWorkspaceId: undefined, workspaceSelection: {} });
+    useWorkspaceStore.getState().clearChatSelection();
   },
 
   createConversation: async () => {
@@ -125,13 +154,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       providerId: provider,
       modelId,
       userText,
-      selectedWorkspaceItems: Object.entries(useWorkspaceStore.getState().workspaceSelection)
+      selectedWorkspaceItems: Object.entries(useWorkspaceStore.getState().chatSelection)
         .filter(([, selected]) => selected)
         .map(([itemId]) => itemId),
       maxOutputTokens: 2048,
     };
 
-    set({ sending: true, composer: "" });
+    set({ sending: true, composer: "", reasoningText: "" });
     useAppStore.setState({ error: undefined });
     const handle = await api.sendMessage(request);
     await get().refreshConversations();
@@ -164,14 +193,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       providerId: provider,
       modelId,
       userText,
-      selectedWorkspaceItems: Object.entries(useWorkspaceStore.getState().workspaceSelection)
+      selectedWorkspaceItems: Object.entries(useWorkspaceStore.getState().chatSelection)
         .filter(([, selected]) => selected)
         .map(([itemId]) => itemId),
       maxOutputTokens: 4096,
       maxIterations: 25,
     };
 
-    set({ sending: true, composer: "", agentToolCalls: [] });
+    set({ sending: true, composer: "", agentToolCalls: [], subAgents: [], agentProgress: undefined, reasoningText: "" });
     useAppStore.setState({ error: undefined });
     const handle = await api.sendAgentMessage(request);
     await get().refreshConversations();
@@ -251,12 +280,49 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
+  handleReasoningEvent: (text: string) => {
+    set((state) => ({ reasoningText: state.reasoningText + text }));
+  },
+
+  toggleReasoningExpanded: () => {
+    set((state) => ({ reasoningExpanded: !state.reasoningExpanded }));
+  },
+
   handleAgentEvent: (event: AgentEvent) => {
     set((state) => {
       const detail = state.activeConversation;
 
+      if (event.kind === "thinking") {
+        return {
+          agentThinking: {
+            message: event.thinkingMessage ?? event.error ?? "Thinking...",
+            phase: event.phase ?? undefined,
+          },
+        };
+      }
+
+      if (event.kind === "reasoning_delta") {
+        return { reasoningText: state.reasoningText + (event.textDelta ?? "") };
+      }
+
+      if (event.kind === "permission_request") {
+        return {
+          pendingApproval: {
+            callId: event.callId ?? "",
+            toolName: event.toolName ?? "unknown",
+            toolArgs: event.toolArgs ?? "{}",
+            reason: event.reason ?? "This tool requires approval.",
+          },
+          agentThinking: {
+            message: `Waiting for approval: ${event.toolName}`,
+            phase: "tool_exec",
+          },
+        };
+      }
+
       if (event.kind === "tool_call") {
         return {
+          pendingApproval: undefined,
           agentToolCalls: [
             ...state.agentToolCalls,
             {
@@ -299,10 +365,51 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return { activeConversation: { ...detail, messages } };
       }
 
+      if (event.kind === "sub_agent_started") {
+        return {
+          subAgents: [
+            ...state.subAgents,
+            {
+              agentId: event.agentId ?? "",
+              label: event.label ?? "Sub-agent",
+              status: "running" as const,
+            },
+          ],
+        };
+      }
+
+      if (event.kind === "sub_agent_complete") {
+        return {
+          subAgents: state.subAgents.map((sa) =>
+            sa.agentId === event.agentId
+              ? {
+                  ...sa,
+                  status: (event.toolSuccess !== false ? "complete" : "error") as "complete" | "error",
+                  summary: event.summary ?? undefined,
+                }
+              : sa,
+          ),
+        };
+      }
+
+      if (event.kind === "progress") {
+        return {
+          agentProgress: {
+            iteration: event.iteration ?? 0,
+            maxIterations: event.maxIterations ?? 0,
+            elapsedMs: event.elapsedMs ?? 0,
+          },
+        };
+      }
+
       if (event.kind === "complete") {
         return {
           sending: false,
           activeStreamId: undefined,
+          agentThinking: undefined,
+          pendingApproval: undefined,
+          subAgents: [],
+          agentProgress: undefined,
         };
       }
 
@@ -311,10 +418,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
         return {
           sending: false,
           activeStreamId: undefined,
+          agentThinking: undefined,
+          pendingApproval: undefined,
+          subAgents: [],
+          agentProgress: undefined,
         };
       }
 
       return {};
     });
+  },
+
+  respondToApproval: async (approved: boolean) => {
+    const state = get();
+    const streamId = state.activeStreamId;
+    const pending = state.pendingApproval;
+    if (!streamId || !pending) return;
+    await api.approveToolCall(streamId, pending.callId, approved);
+    set({ pendingApproval: undefined });
   },
 }));

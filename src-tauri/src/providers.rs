@@ -196,7 +196,7 @@ impl ProviderService {
         })
     }
 
-    pub async fn stream_chat<F>(
+    pub async fn stream_chat<F, R>(
         &self,
         provider: ProviderId,
         model_id: &str,
@@ -206,9 +206,11 @@ impl ProviderService {
         max_output_tokens: Option<u32>,
         cancel: CancellationToken,
         mut on_delta: F,
+        mut on_reasoning: R,
     ) -> AppResult<TokenUsage>
     where
         F: FnMut(String) -> AppResult<()>,
+        R: FnMut(String) -> AppResult<()>,
     {
         let mut messages = vec![serde_json::json!({
             "role": "system",
@@ -309,6 +311,20 @@ impl ProviderService {
                         return Err(AppError::message(format!("Failed to parse streaming response: {err}")));
                     }
                 };
+
+                // Extract reasoning/thinking content (xAI reasoning models)
+                if let Some(reasoning) = json
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .and_then(|choices| choices.first())
+                    .and_then(|choice| choice.get("delta"))
+                    .and_then(|d| d.get("reasoning_content"))
+                    .and_then(Value::as_str)
+                {
+                    if !reasoning.is_empty() {
+                        on_reasoning(reasoning.to_string())?;
+                    }
+                }
 
                 // Extract text content from delta
                 if let Some(delta) = json
@@ -719,13 +735,7 @@ fn find_video_url(json: &Value) -> Option<String> {
 }
 
 pub fn base_system_prompt(workspace_context: &str) -> String {
-    if workspace_context.trim().is_empty() {
-        return "You are Super ASCIIVision, a concise desktop coding assistant. Respond clearly and use Markdown for code.".into();
-    }
-    format!(
-        "You are Super ASCIIVision, a concise desktop coding assistant. Use the attached workspace context when it is relevant.\n\n{}",
-        workspace_context
-    )
+    crate::prompts::chat_system_prompt(workspace_context)
 }
 
 async fn extract_error(response: reqwest::Response) -> AppResult<String> {

@@ -607,6 +607,7 @@ impl HandsBridge {
                     aggregate.push_str(&delta);
                     Ok(())
                 },
+                |_reasoning| Ok(()),
             )
             .await;
 

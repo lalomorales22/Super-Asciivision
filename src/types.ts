@@ -177,6 +177,12 @@ export interface StreamEvent {
   error?: string | null;
 }
 
+export interface ReasoningEvent {
+  streamId: string;
+  messageId: string;
+  text: string;
+}
+
 export interface ChatRequest {
   conversationId: string;
   providerId: ProviderId;
@@ -360,6 +366,17 @@ export interface AgentChatRequest {
   temperature?: number;
   maxOutputTokens?: number;
   maxIterations?: number;
+  /** If set, only these tools are available to the agent. */
+  allowedTools?: string[];
+  /** If set, run a predefined workflow instead of freeform agent. */
+  workflowId?: string;
+}
+
+/** A predefined agent workflow. */
+export interface WorkflowSummary {
+  id: string;
+  label: string;
+  description: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +402,7 @@ export interface MusicCategory {
 
 export interface AgentEvent {
   streamId: string;
-  kind: "thinking" | "tool_call" | "tool_result" | "text_delta" | "complete" | "error";
+  kind: "thinking" | "tool_call" | "tool_result" | "text_delta" | "reasoning_delta" | "complete" | "error" | "permission_request" | "sub_agent_started" | "sub_agent_complete" | "progress";
   toolName?: string | null;
   toolArgs?: string | null;
   toolResult?: string | null;
@@ -394,6 +411,28 @@ export interface AgentEvent {
   messageId?: string | null;
   iterations?: number | null;
   error?: string | null;
+  /** Phase hint: "llm_call", "tool_exec", "compaction", "planning" */
+  phase?: string | null;
+  /** Thinking message text */
+  thinkingMessage?: string | null;
+  /** Tool call ID for permission requests */
+  callId?: string | null;
+  /** Reason a permission is being requested */
+  reason?: string | null;
+  /** Sub-agent tracking ID */
+  agentId?: string | null;
+  /** Sub-agent label */
+  label?: string | null;
+  /** Sub-agent result summary */
+  summary?: string | null;
+  /** Current iteration for progress */
+  iteration?: number | null;
+  /** Max iterations for progress */
+  maxIterations?: number | null;
+  /** Elapsed time for progress */
+  elapsedMs?: number | null;
+  /** Structured tool result metadata (JSON string) */
+  metadata?: string | null;
 }
 
 // ---------------------------------------------------------------------------

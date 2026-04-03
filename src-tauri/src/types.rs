@@ -238,6 +238,8 @@ pub struct AgentChatRequest {
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub max_iterations: Option<u32>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub workflow_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -121,6 +121,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           useChatStore.getState().handleAgentEvent(event);
         });
 
+        await events.onReasoning((event) => {
+          useChatStore.getState().handleReasoningEvent(event.text);
+        });
+
         set({ listenersReady: true });
       }
 

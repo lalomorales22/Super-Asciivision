@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 use walkdir::WalkDir;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::error::{AppError, AppResult};
 
 // ---------------------------------------------------------------------------
@@ -32,23 +34,99 @@ pub struct ToolResult {
 }
 
 // ---------------------------------------------------------------------------
+// Tool trait — extensible tool registration for future tools
+// ---------------------------------------------------------------------------
+
+/// Shared resources available to all tools during execution.
+#[derive(Debug, Clone)]
+pub struct ToolContext {
+    pub workspace_roots: Vec<String>,
+    pub db: Option<crate::db::Database>,
+    pub sub_agent_ctx: Option<crate::sub_agent::SubAgentContext>,
+    pub parent_model: Option<String>,
+    pub cancel: Option<CancellationToken>,
+}
+
+/// Trait for implementing custom tools.  New tools can implement this trait
+/// and be registered with `ToolRegistry::register_dynamic`.
+///
+/// Existing built-in tools use the dispatch-based pattern in `ToolRegistry`
+/// for backwards compatibility.  Both approaches coexist.
+#[async_trait::async_trait]
+pub trait Tool: Send + Sync {
+    fn definition(&self) -> ToolDefinition;
+    async fn execute(&self, args: &Value, ctx: &ToolContext) -> ToolResult;
+}
+
+// ---------------------------------------------------------------------------
 // ToolRegistry
 // ---------------------------------------------------------------------------
 
 /// Central registry that holds workspace roots and exposes every available tool.
-#[derive(Debug, Clone)]
+/// Supports both built-in dispatch tools and dynamic trait-based tools.
+#[derive(Clone)]
 pub struct ToolRegistry {
     workspace_roots: Vec<String>,
+    db: Option<crate::db::Database>,
+    sub_agent_ctx: Option<crate::sub_agent::SubAgentContext>,
+    parent_model: Option<String>,
+    cancel: Option<CancellationToken>,
+    /// Dynamically registered tools (trait-based).
+    dynamic_tools: Vec<std::sync::Arc<dyn Tool>>,
+}
+
+impl std::fmt::Debug for ToolRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolRegistry")
+            .field("workspace_roots", &self.workspace_roots)
+            .field("dynamic_tools_count", &self.dynamic_tools.len())
+            .finish()
+    }
 }
 
 impl ToolRegistry {
     pub fn new(workspace_roots: Vec<String>) -> Self {
-        Self { workspace_roots }
+        Self {
+            workspace_roots,
+            db: None,
+            sub_agent_ctx: None,
+            parent_model: None,
+            cancel: None,
+            dynamic_tools: Vec::new(),
+        }
+    }
+
+    /// Register a dynamic trait-based tool.
+    pub fn register_dynamic(&mut self, tool: impl Tool + 'static) {
+        self.dynamic_tools.push(std::sync::Arc::new(tool));
+    }
+
+    pub fn with_db(mut self, db: crate::db::Database) -> Self {
+        self.db = Some(db);
+        self
+    }
+
+    pub fn with_sub_agent_ctx(mut self, ctx: crate::sub_agent::SubAgentContext, parent_model: String, cancel: CancellationToken) -> Self {
+        self.sub_agent_ctx = Some(ctx);
+        self.parent_model = Some(parent_model);
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Build a `ToolContext` from the registry's shared resources.
+    pub fn context(&self) -> ToolContext {
+        ToolContext {
+            workspace_roots: self.workspace_roots.clone(),
+            db: self.db.clone(),
+            sub_agent_ctx: self.sub_agent_ctx.clone(),
+            parent_model: self.parent_model.clone(),
+            cancel: self.cancel.clone(),
+        }
     }
 
     /// Returns all tool definitions for the xAI / OpenAI function-calling API.
     pub fn definitions(&self) -> Vec<ToolDefinition> {
-        vec![
+        let mut defs = vec![
             def_read_file(),
             def_write_file(),
             def_edit_file(),
@@ -60,9 +138,23 @@ impl ToolRegistry {
             def_git_diff(),
             def_git_log(),
             def_git_commit(),
+            def_git_add(),
+            def_git_checkout(),
             def_mkdir(),
             def_touch(),
-        ]
+            def_tree(),
+            def_find_definition(),
+            def_web_fetch(),
+            def_spawn_agent(),
+            def_spawn_agents_parallel(),
+            def_memory_save(),
+            def_memory_recall(),
+        ];
+        // Append dynamic tool definitions.
+        for tool in &self.dynamic_tools {
+            defs.push(tool.definition());
+        }
+        defs
     }
 
     /// Execute a tool by name, dispatching to the appropriate handler.
@@ -81,7 +173,24 @@ impl ToolRegistry {
             "git_commit" => self.exec_git_commit(arguments).await,
             "mkdir" => self.exec_mkdir(arguments).await,
             "touch" => self.exec_touch(arguments).await,
-            _ => Err(AppError::message(format!("unknown tool: {tool_name}"))),
+            "tree" => self.exec_tree(arguments).await,
+            "find_definition" => self.exec_find_definition(arguments).await,
+            "web_fetch" => self.exec_web_fetch(arguments).await,
+            "git_add" => self.exec_git_add(arguments).await,
+            "git_checkout" => self.exec_git_checkout(arguments).await,
+            "spawn_agent" => self.exec_spawn_agent(arguments).await,
+            "spawn_agents_parallel" => self.exec_spawn_agents_parallel(arguments).await,
+            "memory_save" => self.exec_memory_save(arguments).await,
+            "memory_recall" => self.exec_memory_recall(arguments).await,
+            _ => {
+                // Check dynamic tools before giving up.
+                for tool in &self.dynamic_tools {
+                    if tool.definition().name == tool_name {
+                        return tool.execute(arguments, &self.context()).await;
+                    }
+                }
+                Err(AppError::message(format!("unknown tool: {tool_name}")))
+            }
         };
 
         match result {
@@ -107,7 +216,9 @@ impl ToolRegistry {
     async fn exec_read_file(&self, args: &Value) -> AppResult<String> {
         let path = require_str(args, "path")?;
         let resolved = validate_workspace_path(&path, &self.workspace_roots)?;
-        read_file(&resolved).await
+        let offset = args.get("offset").and_then(|v| v.as_u64()).map(|v| v as usize);
+        let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as usize);
+        read_file(&resolved, offset, limit).await
     }
 
     async fn exec_write_file(&self, args: &Value) -> AppResult<String> {
@@ -121,8 +232,9 @@ impl ToolRegistry {
         let path = require_str(args, "path")?;
         let old_text = require_str(args, "old_text")?;
         let new_text = require_str(args, "new_text")?;
+        let replace_all = args.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
         let resolved = validate_workspace_path(&path, &self.workspace_roots)?;
-        edit_file(&resolved, &old_text, &new_text).await
+        edit_file(&resolved, &old_text, &new_text, replace_all).await
     }
 
     async fn exec_list_directory(&self, args: &Value) -> AppResult<String> {
@@ -231,6 +343,219 @@ impl ToolRegistry {
     }
 
     // -----------------------------------------------------------------------
+    // New tools: tree, find_definition, web_fetch, git_add, git_checkout
+    // -----------------------------------------------------------------------
+
+    async fn exec_tree(&self, args: &Value) -> AppResult<String> {
+        let path = optional_str(args, "path");
+        let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
+        let root = match &path {
+            Some(p) => validate_workspace_path(p, &self.workspace_roots)?,
+            None => PathBuf::from(self.default_root()),
+        };
+        tree(&root, depth).await
+    }
+
+    async fn exec_find_definition(&self, args: &Value) -> AppResult<String> {
+        let symbol = require_str(args, "symbol")?;
+        let path = optional_str(args, "path");
+        let language = optional_str(args, "language");
+        let root = match &path {
+            Some(p) => validate_workspace_path(p, &self.workspace_roots)?,
+            None => PathBuf::from(self.default_root()),
+        };
+        find_definition(&symbol, &root, language.as_deref()).await
+    }
+
+    async fn exec_web_fetch(&self, args: &Value) -> AppResult<String> {
+        let url = require_str(args, "url")?;
+        let max_bytes = args.get("max_bytes").and_then(|v| v.as_u64()).unwrap_or(100_000) as usize;
+        web_fetch(&url, max_bytes).await
+    }
+
+    async fn exec_git_add(&self, args: &Value) -> AppResult<String> {
+        let paths_val = args.get("paths").ok_or_else(|| {
+            AppError::message("missing required parameter: paths")
+        })?;
+        let paths: Vec<String> = if let Some(arr) = paths_val.as_array() {
+            arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+        } else if let Some(s) = paths_val.as_str() {
+            vec![s.to_string()]
+        } else {
+            return Err(AppError::message("paths must be a string or array of strings"));
+        };
+        let cwd = optional_str(args, "cwd");
+        let working_dir = match &cwd {
+            Some(dir) => validate_workspace_path(dir, &self.workspace_roots)?,
+            None => PathBuf::from(self.default_root()),
+        };
+        git_add(&working_dir, &paths).await
+    }
+
+    async fn exec_git_checkout(&self, args: &Value) -> AppResult<String> {
+        let branch = require_str(args, "branch")?;
+        let create = args.get("create").and_then(|v| v.as_bool()).unwrap_or(false);
+        let cwd = optional_str(args, "cwd");
+        let working_dir = match &cwd {
+            Some(dir) => validate_workspace_path(dir, &self.workspace_roots)?,
+            None => PathBuf::from(self.default_root()),
+        };
+        git_checkout(&working_dir, &branch, create).await
+    }
+
+    // -----------------------------------------------------------------------
+    // Sub-agent tools
+    // -----------------------------------------------------------------------
+
+    async fn exec_spawn_agent(&self, args: &Value) -> AppResult<String> {
+        let ctx = self.sub_agent_ctx.as_ref().ok_or_else(|| {
+            AppError::message("spawn_agent requires a sub-agent context")
+        })?;
+        let cancel = self.cancel.as_ref().cloned().unwrap_or_default();
+        let parent_model = self.parent_model.as_deref().unwrap_or("grok-4-1-fast-reasoning");
+        let is_ollama = ctx.endpoint_url.is_some();
+
+        let label = require_str(args, "label")?;
+        let task = require_str(args, "task")?;
+        let model_str = optional_str(args, "model").unwrap_or_else(|| "default".to_string());
+        let model_id = crate::sub_agent::resolve_model(&model_str, parent_model, is_ollama);
+
+        let tools: Option<Vec<String>> = args
+            .get("tools")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+
+        let config = crate::sub_agent::SubAgentConfig {
+            agent_id: uuid::Uuid::new_v4().to_string(),
+            label: label.clone(),
+            model_id,
+            system_prompt: format!(
+                "You are a focused sub-agent. Your task: {task}\n\n\
+                 Be concise and thorough. Return your findings as structured text."
+            ),
+            max_iterations: 15,
+            allowed_tools: tools,
+            task,
+        };
+
+        // Spawn in a separate task to break async recursion
+        // (spawn_agent → run_agent → execute → spawn_agent).
+        let ctx = ctx.clone();
+        let label2 = label.clone();
+        let handle = tokio::spawn(async move {
+            crate::sub_agent::run_sub_agent(&ctx, config, cancel, |_| Ok(())).await
+        });
+
+        let result = handle.await.map_err(|e| AppError::message(format!("sub-agent task failed: {e}")))?;
+
+        if result.success {
+            Ok(format!(
+                "[Sub-agent '{}' completed]\n\n{}",
+                label2, result.final_text
+            ))
+        } else {
+            Ok(format!(
+                "[Sub-agent '{}' failed: {}]",
+                label2,
+                result.error.unwrap_or_else(|| "unknown error".to_string())
+            ))
+        }
+    }
+
+    async fn exec_spawn_agents_parallel(&self, args: &Value) -> AppResult<String> {
+        let ctx = self.sub_agent_ctx.as_ref().ok_or_else(|| {
+            AppError::message("spawn_agents_parallel requires a sub-agent context")
+        })?;
+        let cancel = self.cancel.as_ref().cloned().unwrap_or_default();
+        let parent_model = self.parent_model.as_deref().unwrap_or("grok-4-1-fast-reasoning");
+        let is_ollama = ctx.endpoint_url.is_some();
+
+        let agents_arr = args
+            .get("agents")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| AppError::message("missing required parameter: agents"))?;
+
+        let mut configs = Vec::new();
+        for agent_val in agents_arr {
+            let label = agent_val.get("label").and_then(|v| v.as_str()).unwrap_or("agent").to_string();
+            let task = agent_val.get("task").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let model_str = agent_val.get("model").and_then(|v| v.as_str()).unwrap_or("default");
+            let model_id = crate::sub_agent::resolve_model(model_str, parent_model, is_ollama);
+            let tools: Option<Vec<String>> = agent_val
+                .get("tools")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+
+            configs.push(crate::sub_agent::SubAgentConfig {
+                agent_id: uuid::Uuid::new_v4().to_string(),
+                label: label.clone(),
+                model_id,
+                system_prompt: format!(
+                    "You are a focused sub-agent. Your task: {task}\n\n\
+                     Be concise and thorough. Return your findings as structured text."
+                ),
+                max_iterations: 15,
+                allowed_tools: tools,
+                task,
+            });
+        }
+
+        let ctx = ctx.clone();
+        let handle = tokio::spawn(async move {
+            crate::sub_agent::run_sub_agents_parallel(&ctx, configs, cancel).await
+        });
+        let results = handle.await.map_err(|e| AppError::message(format!("parallel sub-agents failed: {e}")))?;
+
+        let mut output = String::new();
+        for result in &results {
+            output.push_str(&format!("## Sub-agent: {}\n", result.label));
+            if result.success {
+                output.push_str(&result.final_text);
+            } else {
+                output.push_str(&format!(
+                    "**Failed:** {}\n",
+                    result.error.as_deref().unwrap_or("unknown error")
+                ));
+            }
+            output.push_str("\n\n---\n\n");
+        }
+        Ok(output)
+    }
+
+    // -----------------------------------------------------------------------
+    // Memory tools
+    // -----------------------------------------------------------------------
+
+    async fn exec_memory_save(&self, args: &Value) -> AppResult<String> {
+        let key = require_str(args, "key")?;
+        let value = require_str(args, "value")?;
+        let db = self.db.as_ref().ok_or_else(|| {
+            AppError::message("memory tools require a database connection")
+        })?;
+        db.upsert_agent_memory(&key, &value)?;
+        Ok(format!("saved memory: {key}"))
+    }
+
+    async fn exec_memory_recall(&self, args: &Value) -> AppResult<String> {
+        let db = self.db.as_ref().ok_or_else(|| {
+            AppError::message("memory tools require a database connection")
+        })?;
+        let query = optional_str(args, "query");
+        let memories = match &query {
+            Some(q) if !q.is_empty() => db.search_agent_memories(q)?,
+            _ => db.list_agent_memories()?,
+        };
+        if memories.is_empty() {
+            return Ok("no memories found".to_string());
+        }
+        let lines: Vec<String> = memories
+            .iter()
+            .map(|m| format!("- **{}**: {}", m.key, m.value))
+            .collect();
+        Ok(lines.join("\n"))
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
@@ -249,7 +574,20 @@ impl ToolRegistry {
 /// Canonicalize `path` and verify it lives under one of `roots`.
 pub fn validate_workspace_path(path: &str, roots: &[String]) -> AppResult<PathBuf> {
     let candidate = PathBuf::from(path);
-    let canonical = candidate.canonicalize().map_err(|e| {
+
+    // If the path is relative (e.g. ".", "src/main.rs"), resolve it against
+    // the first workspace root instead of the process cwd.
+    let resolved = if candidate.is_relative() {
+        if let Some(root) = roots.first() {
+            PathBuf::from(root).join(&candidate)
+        } else {
+            candidate
+        }
+    } else {
+        candidate
+    };
+
+    let canonical = resolved.canonicalize().map_err(|e| {
         AppError::message(format!("cannot resolve path \"{path}\": {e}"))
     })?;
 
@@ -270,7 +608,16 @@ pub fn validate_workspace_path(path: &str, roots: &[String]) -> AppResult<PathBu
 /// Like `validate_workspace_path` but allows paths that do not yet exist by
 /// checking the nearest existing ancestor instead.  Used for `mkdir` / `touch`.
 fn validate_workspace_path_allow_new(path: &str, roots: &[String]) -> AppResult<PathBuf> {
-    let candidate = PathBuf::from(path);
+    let raw = PathBuf::from(path);
+    let candidate = if raw.is_relative() {
+        if let Some(root) = roots.first() {
+            PathBuf::from(root).join(&raw)
+        } else {
+            raw
+        }
+    } else {
+        raw
+    };
 
     // Walk up to find the first existing ancestor so we can canonicalize it.
     let mut ancestor = candidate.clone();
@@ -328,9 +675,39 @@ fn optional_str(args: &Value, key: &str) -> Option<String> {
 // Tool implementations — filesystem
 // ---------------------------------------------------------------------------
 
-async fn read_file(path: &PathBuf) -> AppResult<String> {
+async fn read_file(path: &PathBuf, offset: Option<usize>, limit: Option<usize>) -> AppResult<String> {
     let content = tokio::fs::read_to_string(path).await?;
-    Ok(content)
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
+
+    let start = offset.unwrap_or(0);
+    if start >= total_lines {
+        return Ok(format!("[file has {total_lines} lines, offset {start} is past end]"));
+    }
+
+    let end = match limit {
+        Some(n) => (start + n).min(total_lines),
+        None => total_lines,
+    };
+
+    let selected: Vec<String> = lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(i, line)| format!("{}\t{}", start + i + 1, line))
+        .collect();
+
+    let mut result = selected.join("\n");
+
+    // Add metadata when reading a partial range
+    if offset.is_some() || limit.is_some() {
+        result = format!(
+            "[showing lines {}-{} of {total_lines}]\n{result}",
+            start + 1,
+            end
+        );
+    }
+
+    Ok(result)
 }
 
 async fn write_file(path: &PathBuf, content: &str) -> AppResult<String> {
@@ -341,20 +718,75 @@ async fn write_file(path: &PathBuf, content: &str) -> AppResult<String> {
     Ok(format!("wrote {} bytes to {}", content.len(), path.display()))
 }
 
-async fn edit_file(path: &PathBuf, old_text: &str, new_text: &str) -> AppResult<String> {
+async fn edit_file(path: &PathBuf, old_text: &str, new_text: &str, replace_all: bool) -> AppResult<String> {
     let content = tokio::fs::read_to_string(path).await?;
     let count = content.matches(old_text).count();
+
     if count == 0 {
-        return Err(AppError::message(
-            "old_text not found in file — no replacements made",
-        ));
+        // Build a helpful error with a fuzzy hint.
+        let hint = find_similar_snippet(&content, old_text);
+        let mut msg = String::from("old_text not found in file — no replacements made.");
+        if let Some(snippet) = hint {
+            msg.push_str(&format!(
+                "\n\nDid you mean this nearby text?\n---\n{snippet}\n---"
+            ));
+        }
+        return Err(AppError::message(msg));
     }
-    let updated = content.replacen(old_text, new_text, 1);
+
+    let updated = if replace_all {
+        content.replace(old_text, new_text)
+    } else {
+        content.replacen(old_text, new_text, 1)
+    };
+
     tokio::fs::write(path, &updated).await?;
+
+    // Build a simple unified diff for the output.
+    let diff = make_simple_diff(old_text, new_text);
+    let replaced = if replace_all { count } else { 1 };
     Ok(format!(
-        "replaced 1 occurrence in {} ({count} total matches found)",
+        "replaced {replaced} occurrence(s) in {} ({count} total matches)\n\n{diff}",
         path.display()
     ))
+}
+
+/// Find a snippet in `content` that is similar to `needle` (shares a long
+/// common substring).  Returns the best candidate or None.
+fn find_similar_snippet(content: &str, needle: &str) -> Option<String> {
+    if needle.is_empty() || content.is_empty() {
+        return None;
+    }
+    // Trim leading/trailing whitespace from needle lines and search for a
+    // partial match on the first meaningful line.
+    let first_line = needle.lines().find(|l| !l.trim().is_empty())?;
+    let trimmed = first_line.trim();
+    if trimmed.len() < 4 {
+        return None;
+    }
+    // Search for the trimmed first line — if found, extract surrounding context.
+    let idx = content.find(trimmed)?;
+    let start = content[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let remaining = &content[idx..];
+    let end_offset = remaining
+        .char_indices()
+        .filter(|(_, c)| *c == '\n')
+        .nth(4) // show ~5 lines of context
+        .map(|(i, _)| idx + i)
+        .unwrap_or_else(|| content.len().min(idx + 300));
+    Some(content[start..end_offset].to_string())
+}
+
+/// Build a minimal unified-diff style representation of the change.
+fn make_simple_diff(old: &str, new: &str) -> String {
+    let mut diff = String::new();
+    for line in old.lines() {
+        diff.push_str(&format!("- {line}\n"));
+    }
+    for line in new.lines() {
+        diff.push_str(&format!("+ {line}\n"));
+    }
+    diff
 }
 
 async fn list_directory(path: &PathBuf) -> AppResult<String> {
@@ -424,6 +856,8 @@ async fn grep(pattern: &str, root: &PathBuf, include: Option<&str>) -> AppResult
     let mut cmd_args = vec![
         "-rn".to_string(),
         "--color=never".to_string(),
+        "-m".to_string(),
+        "200".to_string(), // limit to 200 matches per file
     ];
 
     if let Some(glob) = include {
@@ -449,12 +883,20 @@ async fn grep(pattern: &str, root: &PathBuf, include: Option<&str>) -> AppResult
         return Ok("no matches found".to_string());
     }
 
-    // Truncate very large output.
-    let truncated = if stdout.len() > 100_000 {
-        let cut = &stdout[..100_000];
-        format!("{cut}\n... output truncated (exceeded 100 KB)")
+    // Limit to first 500 lines, then truncate by size.
+    let lines: Vec<&str> = stdout.lines().collect();
+    let limited = if lines.len() > 500 {
+        let kept = lines[..500].join("\n");
+        format!("{kept}\n... [{} total matches, showing first 500]", lines.len())
     } else {
         stdout
+    };
+
+    let truncated = if limited.len() > 100_000 {
+        let cut = &limited[..100_000];
+        format!("{cut}\n... output truncated (exceeded 100 KB)")
+    } else {
+        limited
     };
 
     Ok(truncated)
@@ -576,6 +1018,203 @@ async fn run_git(cwd: &PathBuf, args: &[&str]) -> AppResult<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Tool implementations — tree, find_definition, web_fetch
+// ---------------------------------------------------------------------------
+
+async fn tree(root: &PathBuf, max_depth: usize) -> AppResult<String> {
+    let root = root.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut lines = Vec::new();
+        for entry in WalkDir::new(&root)
+            .max_depth(max_depth)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| !is_ignored_dir(e.path()))
+        {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let depth = entry.depth();
+            let indent = "  ".repeat(depth);
+            let name = entry
+                .path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(".");
+            let suffix = if entry.file_type().is_dir() { "/" } else { "" };
+            lines.push(format!("{indent}{name}{suffix}"));
+            if lines.len() >= 2000 {
+                lines.push("... [truncated at 2000 entries]".to_string());
+                break;
+            }
+        }
+        Ok::<String, AppError>(lines.join("\n"))
+    })
+    .await
+    .map_err(|e| AppError::message(format!("tree task failed: {e}")))?;
+    result
+}
+
+async fn find_definition(symbol: &str, root: &PathBuf, language: Option<&str>) -> AppResult<String> {
+    // Build a pattern that matches common definition forms across languages.
+    let patterns: Vec<String> = match language {
+        Some("rust" | "rs") => vec![
+            format!(r"(fn|struct|enum|trait|type|const|static|mod|impl)\s+{symbol}\b"),
+        ],
+        Some("python" | "py") => vec![
+            format!(r"(def|class)\s+{symbol}\b"),
+        ],
+        Some("javascript" | "typescript" | "js" | "ts" | "tsx" | "jsx") => vec![
+            format!(r"(function|class|const|let|var|interface|type|enum)\s+{symbol}\b"),
+            format!(r"(export\s+(default\s+)?(function|class|const|let|var|interface|type))\s+{symbol}\b"),
+        ],
+        Some("go") => vec![
+            format!(r"(func|type|var|const)\s+{symbol}\b"),
+        ],
+        Some("java" | "kotlin") => vec![
+            format!(r"(class|interface|enum|record)\s+{symbol}\b"),
+            format!(r"(public|private|protected|static).*\s+{symbol}\s*\("),
+        ],
+        _ => vec![
+            // Universal: catch most languages
+            format!(r"(fn|function|def|class|struct|enum|trait|type|interface|const|let|var|func|impl|mod)\s+{symbol}\b"),
+        ],
+    };
+
+    let combined = patterns.join("|");
+    let mut cmd_args = vec![
+        "-rnE".to_string(),
+        "--color=never".to_string(),
+        "-m".to_string(),
+        "50".to_string(),
+    ];
+    cmd_args.push("--".to_string());
+    cmd_args.push(combined);
+    cmd_args.push(root.to_string_lossy().to_string());
+
+    let output = Command::new("grep")
+        .args(&cmd_args)
+        .output()
+        .await?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if stdout.is_empty() {
+        return Ok(format!("no definition found for '{symbol}'"));
+    }
+    Ok(stdout)
+}
+
+async fn web_fetch(url: &str, max_bytes: usize) -> AppResult<String> {
+    // Basic URL validation
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(AppError::message("URL must start with http:// or https://"));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| AppError::message(format!("failed to create HTTP client: {e}")))?;
+
+    let response = client.get(url).send().await.map_err(|e| {
+        AppError::message(format!("fetch failed: {e}"))
+    })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(AppError::message(format!("HTTP {status}")));
+    }
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let bytes = response.bytes().await.map_err(|e| {
+        AppError::message(format!("failed to read response: {e}"))
+    })?;
+
+    let body = if bytes.len() > max_bytes {
+        let truncated = String::from_utf8_lossy(&bytes[..max_bytes]).to_string();
+        format!("{truncated}\n... [truncated at {max_bytes} bytes]")
+    } else {
+        String::from_utf8_lossy(&bytes).to_string()
+    };
+
+    // Strip HTML tags if content-type is HTML (simple regex-free approach).
+    let text = if content_type.contains("text/html") {
+        strip_html_tags(&body)
+    } else {
+        body
+    };
+
+    Ok(text)
+}
+
+/// Very simple HTML tag stripper — not a full parser, but good enough for
+/// extracting readable text from fetched web pages.
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut in_script = false;
+    for ch in html.chars() {
+        if ch == '<' {
+            in_tag = true;
+            // Peek for script/style start (crude but functional).
+            let lower = html[result.len()..].to_lowercase();
+            if lower.starts_with("<script") || lower.starts_with("<style") {
+                in_script = true;
+            }
+            if lower.starts_with("</script") || lower.starts_with("</style") {
+                in_script = false;
+            }
+            continue;
+        }
+        if ch == '>' {
+            in_tag = false;
+            continue;
+        }
+        if !in_tag && !in_script {
+            result.push(ch);
+        }
+    }
+    // Collapse excessive whitespace.
+    let mut collapsed = String::new();
+    let mut last_was_newline = false;
+    for line in result.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !last_was_newline {
+                collapsed.push('\n');
+                last_was_newline = true;
+            }
+        } else {
+            collapsed.push_str(trimmed);
+            collapsed.push('\n');
+            last_was_newline = false;
+        }
+    }
+    collapsed
+}
+
+async fn git_add(cwd: &PathBuf, paths: &[String]) -> AppResult<String> {
+    let mut args = vec!["add".to_string(), "--".to_string()];
+    args.extend(paths.iter().cloned());
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_git(cwd, &arg_refs).await
+}
+
+async fn git_checkout(cwd: &PathBuf, branch: &str, create: bool) -> AppResult<String> {
+    if create {
+        run_git(cwd, &["checkout", "-b", branch]).await
+    } else {
+        run_git(cwd, &["checkout", branch]).await
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tool implementations — utilities
 // ---------------------------------------------------------------------------
 
@@ -679,13 +1318,21 @@ fn is_ignored_dir(path: &std::path::Path) -> bool {
 fn def_read_file() -> ToolDefinition {
     ToolDefinition {
         name: "read_file".into(),
-        description: "Read the contents of a file at the given path within the workspace.".into(),
+        description: "Read the contents of a file at the given path within the workspace. Use offset and limit to read specific line ranges of large files.".into(),
         parameters: json!({
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
                     "description": "Absolute or workspace-relative file path to read"
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (0-based). Omit to start from the beginning."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read. Omit to read the entire file."
                 }
             },
             "required": ["path"]
@@ -717,7 +1364,7 @@ fn def_write_file() -> ToolDefinition {
 fn def_edit_file() -> ToolDefinition {
     ToolDefinition {
         name: "edit_file".into(),
-        description: "Find and replace text in a file. Performs an exact string match of old_text and replaces the first occurrence with new_text.".into(),
+        description: "Find and replace exact text in a file. Replaces the first occurrence by default. Returns a diff of the change.".into(),
         parameters: json!({
             "type": "object",
             "properties": {
@@ -727,11 +1374,15 @@ fn def_edit_file() -> ToolDefinition {
                 },
                 "old_text": {
                     "type": "string",
-                    "description": "The exact text to find in the file"
+                    "description": "The exact text to find in the file (must match including whitespace/indentation)"
                 },
                 "new_text": {
                     "type": "string",
                     "description": "The replacement text"
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "If true, replace ALL occurrences instead of just the first. Default false."
                 }
             },
             "required": ["path", "old_text", "new_text"]
@@ -933,6 +1584,217 @@ fn def_touch() -> ToolDefinition {
                 }
             },
             "required": ["path"]
+        }),
+    }
+}
+
+fn def_tree() -> ToolDefinition {
+    ToolDefinition {
+        name: "tree".into(),
+        description: "Show a recursive directory tree (respects .gitignore-style ignores). Better than list_directory for understanding project structure.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Root directory. Defaults to the first workspace root."
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "Maximum depth to recurse (default 4)"
+                }
+            },
+            "required": []
+        }),
+    }
+}
+
+fn def_find_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "find_definition".into(),
+        description: "Find function, class, struct, or type definitions by symbol name. Faster than grep for locating definitions.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "The symbol name to search for (function, class, struct, etc.)"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Directory to search in. Defaults to the first workspace root."
+                },
+                "language": {
+                    "type": "string",
+                    "description": "Programming language hint: rust, python, javascript, typescript, go, java. Improves accuracy."
+                }
+            },
+            "required": ["symbol"]
+        }),
+    }
+}
+
+fn def_web_fetch() -> ToolDefinition {
+    ToolDefinition {
+        name: "web_fetch".into(),
+        description: "Fetch a URL and return its text content. HTML pages are stripped to plain text. Respects a 30-second timeout.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to fetch (must start with http:// or https://)"
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum response size in bytes (default 100000)"
+                }
+            },
+            "required": ["url"]
+        }),
+    }
+}
+
+fn def_git_add() -> ToolDefinition {
+    ToolDefinition {
+        name: "git_add".into(),
+        description: "Stage specific files for the next commit. Safer than git_commit which stages everything.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "description": "File path(s) to stage. Can be a single string or an array of strings.",
+                    "oneOf": [
+                        { "type": "string" },
+                        { "type": "array", "items": { "type": "string" } }
+                    ]
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory for git. Defaults to the first workspace root."
+                }
+            },
+            "required": ["paths"]
+        }),
+    }
+}
+
+fn def_git_checkout() -> ToolDefinition {
+    ToolDefinition {
+        name: "git_checkout".into(),
+        description: "Switch to a different git branch, optionally creating it.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "type": "string",
+                    "description": "Branch name to switch to"
+                },
+                "create": {
+                    "type": "boolean",
+                    "description": "If true, create the branch (git checkout -b). Default false."
+                },
+                "cwd": {
+                    "type": "string",
+                    "description": "Working directory for git. Defaults to the first workspace root."
+                }
+            },
+            "required": ["branch"]
+        }),
+    }
+}
+
+fn def_spawn_agent() -> ToolDefinition {
+    ToolDefinition {
+        name: "spawn_agent".into(),
+        description: "Launch a focused sub-agent for a specific task. The sub-agent runs independently with its own context and returns a result. Use for tasks that can be delegated.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "description": "Short label for the sub-agent task (e.g. 'code-explorer', 'reviewer')"
+                },
+                "task": {
+                    "type": "string",
+                    "description": "Detailed instruction for the sub-agent — what it should do and return"
+                },
+                "tools": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Tool names to make available (optional, defaults to read-only set: read_file, list_directory, search_files, grep, tree, find_definition, git_status, git_diff, git_log)"
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model override: 'fast' for quick lookups, 'best' for complex reasoning, 'default' for current model, or a specific model ID"
+                }
+            },
+            "required": ["label", "task"]
+        }),
+    }
+}
+
+fn def_spawn_agents_parallel() -> ToolDefinition {
+    ToolDefinition {
+        name: "spawn_agents_parallel".into(),
+        description: "Launch multiple sub-agents in parallel. Each runs independently and returns results. Use when tasks are independent of each other.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "agents": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": { "type": "string", "description": "Short label for this sub-agent" },
+                            "task": { "type": "string", "description": "Task instruction" },
+                            "tools": { "type": "array", "items": { "type": "string" }, "description": "Available tool names (optional)" },
+                            "model": { "type": "string", "description": "Model: 'fast', 'best', 'default', or specific ID" }
+                        },
+                        "required": ["label", "task"]
+                    },
+                    "description": "Array of sub-agent configurations to run in parallel"
+                }
+            },
+            "required": ["agents"]
+        }),
+    }
+}
+
+fn def_memory_save() -> ToolDefinition {
+    ToolDefinition {
+        name: "memory_save".into(),
+        description: "Save a fact to persistent memory for use in future conversations. Use descriptive keys.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "A short, descriptive key for the memory (e.g. \"user_prefers_rust\", \"project_uses_tauri\")"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The fact or information to remember"
+                }
+            },
+            "required": ["key", "value"]
+        }),
+    }
+}
+
+fn def_memory_recall() -> ToolDefinition {
+    ToolDefinition {
+        name: "memory_recall".into(),
+        description: "Search saved memories by keyword, or list all memories if no query is given.".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional keyword to search for in memory keys and values. Omit to list all memories."
+                }
+            },
+            "required": []
         }),
     }
 }

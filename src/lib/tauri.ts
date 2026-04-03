@@ -4,6 +4,7 @@ import type {
   AgentChatRequest,
   AgentEvent,
   ChatRequest,
+  ReasoningEvent,
   Conversation,
   ConversationDetail,
   ConversationSummary,
@@ -74,6 +75,10 @@ export const api = {
     invoke<StreamHandle>("send_message", { input }),
   cancelStream: (streamId: string) =>
     invoke<void>("cancel_stream", { streamId }),
+  approveToolCall: (streamId: string, callId: string, approved: boolean) =>
+    invoke<void>("approve_tool_call", { streamId, callId, approved }),
+  listWorkflows: () =>
+    invoke<[string, string, string][]>("list_workflows"),
   createWorkspace: (input: NewWorkspace) =>
     invoke<Workspace>("create_workspace", { input }),
   updateWorkspace: (workspaceId: string, input: UpdateWorkspaceRequest) =>
@@ -175,4 +180,6 @@ export const events = {
     listen<HandsStatus>("hands://status", ({ payload }) => handler(payload)),
   onAgent: (handler: (event: AgentEvent) => void) =>
     listen<AgentEvent>("agent://event", ({ payload }) => handler(payload)),
+  onReasoning: (handler: (event: ReasoningEvent) => void) =>
+    listen<ReasoningEvent>("chat://reasoning", ({ payload }) => handler(payload)),
 };

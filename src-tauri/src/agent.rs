@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::time::Duration;
+
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -22,6 +26,13 @@ pub struct AgentConfig {
     pub workspace_roots: Vec<String>,
     /// Override the chat endpoint (defaults to xAI).
     pub endpoint_url: Option<String>,
+    /// Tool permission configuration.
+    pub permissions: crate::permissions::PermissionConfig,
+    /// If set, only these tools are available to the agent.
+    /// `None` means all tools are available.
+    pub allowed_tools: Option<Vec<String>>,
+    /// Maximum output tokens per LLM call.
+    pub max_output_tokens: Option<u32>,
 }
 
 impl Default for AgentConfig {
@@ -32,6 +43,9 @@ impl Default for AgentConfig {
             max_iterations: 25,
             workspace_roots: Vec::new(),
             endpoint_url: None,
+            permissions: crate::permissions::PermissionConfig::defaults(),
+            allowed_tools: None,
+            max_output_tokens: Some(16384),
         }
     }
 }
@@ -46,7 +60,12 @@ impl Default for AgentConfig {
 #[serde(tag = "kind")]
 pub enum AgentEvent {
     #[serde(rename = "thinking")]
-    Thinking { message: String },
+    Thinking {
+        message: String,
+        /// Optional phase hint for the UI: "llm_call", "tool_exec", "compaction", "planning"
+        #[serde(skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
+    },
     #[serde(rename = "tool_call")]
     ToolCall {
         tool_name: String,
@@ -60,6 +79,25 @@ pub enum AgentEvent {
         success: bool,
         output: String,
     },
+    #[serde(rename = "permission_request")]
+    PermissionRequest {
+        call_id: String,
+        tool_name: String,
+        tool_input: String,
+        reason: String,
+    },
+    #[serde(rename = "sub_agent_started")]
+    SubAgentStarted { agent_id: String, label: String },
+    #[serde(rename = "sub_agent_complete")]
+    SubAgentComplete {
+        agent_id: String,
+        label: String,
+        success: bool,
+        summary: String,
+    },
+    /// Streamed reasoning/thinking content from xAI reasoning models.
+    #[serde(rename = "reasoning_delta")]
+    ReasoningDelta { text: String },
     #[serde(rename = "text_delta")]
     TextDelta { text: String },
     #[serde(rename = "complete")]
@@ -113,34 +151,87 @@ pub struct ToolCallRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Internal response structures (xAI / OpenAI-compatible)
+// Internal: streamed delta accumulator for tool calls
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
-struct ChatResponse {
-    choices: Vec<ChatChoice>,
-    usage: Option<ChatUsage>,
+/// Accumulates incremental tool-call deltas from SSE chunks into complete
+/// `ToolCall` objects.  xAI/OpenAI streams tool calls as:
+///   - First chunk for index N: `{ index: N, id: "...", function: { name: "...", arguments: "" } }`
+///   - Subsequent chunks:       `{ index: N, function: { arguments: "<next chunk>" } }`
+#[derive(Debug, Default)]
+struct ToolCallAccumulator {
+    /// Keyed by tool-call index within the current response.
+    calls: HashMap<u64, (String, String, String)>, // (id, name, arguments_buffer)
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatChoice {
-    message: ChatMessage,
-    finish_reason: Option<String>,
+impl ToolCallAccumulator {
+    fn push_delta(&mut self, delta: &Value) {
+        let index = delta.get("index").and_then(Value::as_u64).unwrap_or(0);
+        let entry = self.calls.entry(index).or_insert_with(|| {
+            let id = delta.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+            let name = delta
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            (id, name, String::new())
+        });
+        // Always append argument fragments.
+        if let Some(arg_chunk) = delta
+            .get("function")
+            .and_then(|f| f.get("arguments"))
+            .and_then(Value::as_str)
+        {
+            entry.2.push_str(arg_chunk);
+        }
+        // Update id/name if provided (first chunk).
+        if let Some(id) = delta.get("id").and_then(Value::as_str) {
+            if !id.is_empty() {
+                entry.0 = id.to_string();
+            }
+        }
+        if let Some(name) = delta
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(Value::as_str)
+        {
+            if !name.is_empty() {
+                entry.1 = name.to_string();
+            }
+        }
+    }
+
+    fn finish(self) -> Vec<ToolCall> {
+        let mut indices: Vec<u64> = self.calls.keys().copied().collect();
+        indices.sort_unstable();
+        indices
+            .into_iter()
+            .filter_map(|idx| {
+                let (id, name, args) = self.calls.get(&idx)?;
+                if name.is_empty() {
+                    return None;
+                }
+                Some(ToolCall {
+                    id: id.clone(),
+                    call_type: Some("function".into()),
+                    function: ToolCallFunction {
+                        name: name.clone(),
+                        arguments: args.clone(),
+                    },
+                })
+            })
+            .collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.calls.is_empty()
+    }
 }
 
-#[derive(Debug, Deserialize)]
-struct ChatMessage {
-    #[allow(dead_code)]
-    role: Option<String>,
-    content: Option<String>,
-    tool_calls: Option<Vec<ToolCall>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatUsage {
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
-}
+// ---------------------------------------------------------------------------
+// Internal response structures (for non-streaming fallback / error parsing)
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
 struct ChatErrorResponse {
@@ -153,15 +244,27 @@ struct ChatErrorDetail {
 }
 
 // ---------------------------------------------------------------------------
-// The agent execution loop
+// The agent execution loop (streaming)
 // ---------------------------------------------------------------------------
 
 const XAI_CHAT_ENDPOINT: &str = "https://api.x.ai/v1/chat/completions";
 
-/// Runs the agentic loop: sends chat requests with tool definitions to an
-/// OpenAI-compatible endpoint, executes any tool calls the model returns,
-/// feeds results back, and repeats until the model produces a final text
-/// response (or the iteration limit / cancellation token fires).
+/// Runs the agentic loop with **streaming** responses.  Sends chat requests
+/// with tool definitions to an OpenAI-compatible endpoint, streams the
+/// response, executes any tool calls the model returns, feeds results back,
+/// and repeats until the model produces a final text response (or the
+/// iteration limit / cancellation token fires).
+/// Channel for receiving tool-call approval decisions from the frontend.
+/// `None` means auto-approve everything (no interactive permission checks).
+pub type ApprovalReceiver = tokio::sync::mpsc::Receiver<ToolApproval>;
+
+/// A decision from the user about whether to allow a tool call.
+#[derive(Debug, Clone)]
+pub struct ToolApproval {
+    pub call_id: String,
+    pub approved: bool,
+}
+
 pub async fn run_agent(
     client: &reqwest::Client,
     api_key: &str,
@@ -170,10 +273,18 @@ pub async fn run_agent(
     tools: &crate::tools::ToolRegistry,
     cancel: CancellationToken,
     on_event: impl Fn(AgentEvent) -> AppResult<()>,
+    mut approval_rx: Option<&mut ApprovalReceiver>,
 ) -> AppResult<AgentLoopResult> {
     // -- Build the tools array in OpenAI function-calling format ------------
-    let tool_definitions: Vec<Value> = tools
-        .definitions()
+    let all_defs = tools.definitions();
+    let filtered_defs: Vec<_> = match &config.allowed_tools {
+        Some(allowed) => all_defs
+            .into_iter()
+            .filter(|def| allowed.iter().any(|a| a == &def.name))
+            .collect(),
+        None => all_defs,
+    };
+    let tool_definitions: Vec<Value> = filtered_defs
         .iter()
         .map(|def| {
             serde_json::json!({
@@ -236,14 +347,26 @@ pub async fn run_agent(
         iterations += 1;
 
         let _ = on_event(AgentEvent::Thinking {
-            message: format!("Iteration {}", iterations),
+            message: format!(
+                "Analyzing and planning (iteration {}/{})",
+                iterations, config.max_iterations
+            ),
+            phase: Some("llm_call".into()),
         });
 
         // -- Build the request body -----------------------------------------
         let mut request_body = serde_json::json!({
             "model": config.model_id,
             "messages": messages,
+            "stream": true,
+            "stream_options": { "include_usage": true },
         });
+
+        // Set token limit — critical for reasoning models which will think
+        // indefinitely without a cap.
+        if let Some(max_tokens) = config.max_output_tokens {
+            request_body["max_tokens"] = serde_json::json!(max_tokens);
+        }
 
         if !tool_definitions.is_empty() {
             request_body["tools"] = Value::Array(tool_definitions.clone());
@@ -251,7 +374,7 @@ pub async fn run_agent(
         }
 
         // -- Send request to LLM endpoint ------------------------------------
-        debug!("agent: sending request (iteration {})", iterations);
+        debug!("agent: sending streaming request (iteration {})", iterations);
 
         let endpoint = config
             .endpoint_url
@@ -275,116 +398,311 @@ pub async fn run_agent(
             return Err(AppError::message(msg));
         }
 
-        let raw_body = response.text().await?;
-        let chat_response: ChatResponse = serde_json::from_str(&raw_body).map_err(|err| {
-            error!("agent: failed to parse xAI response: {err}");
-            AppError::message(format!("Failed to parse xAI response: {err}"))
-        })?;
+        // -- Stream the response and accumulate content / tool calls --------
+        let mut content_buffer = String::new();
+        let mut tool_acc = ToolCallAccumulator::default();
+        let mut finish_reason = String::from("stop");
+        let mut stream = response.bytes_stream();
+        let mut sse_buffer = String::new();
+        let chunk_timeout = Duration::from_secs(300);
 
-        // -- Accumulate usage -----------------------------------------------
-        if let Some(ref u) = chat_response.usage {
-            total_usage.input_tokens = Some(
-                total_usage.input_tokens.unwrap_or(0) + u.prompt_tokens.unwrap_or(0),
-            );
-            total_usage.output_tokens = Some(
-                total_usage.output_tokens.unwrap_or(0) + u.completion_tokens.unwrap_or(0),
-            );
-        }
+        loop {
+            if cancel.is_cancelled() {
+                return Err(AppError::message("cancelled"));
+            }
 
-        // -- Extract the first choice (xAI always returns one) --------------
-        let choice = chat_response
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| AppError::message("xAI returned no choices"))?;
+            let maybe_chunk = tokio::time::timeout(chunk_timeout, stream.next()).await;
+            let chunk = match maybe_chunk {
+                Ok(Some(chunk)) => chunk?,
+                Ok(None) => break,
+                Err(_) => {
+                    error!("agent: stream timed out after 300s");
+                    return Err(AppError::message(
+                        "Stream timed out — the model may need more time.",
+                    ));
+                }
+            };
 
-        let _finish_reason = choice.finish_reason.as_deref().unwrap_or("stop");
-        let assistant_content = choice.message.content.clone();
-        let assistant_tool_calls = choice.message.tool_calls.clone();
+            sse_buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-        // -- Case 1: model wants to call tools -----------------------------
-        if let Some(ref calls) = assistant_tool_calls {
-            if !calls.is_empty() {
-                // Append the full assistant message (with tool_calls) to the
-                // conversation so the model can see what it asked for.
-                let assistant_msg = build_assistant_message_with_tool_calls(
-                    assistant_content.as_deref(),
-                    calls,
-                );
-                messages.push(assistant_msg);
+            while let Some(event) = take_sse_event(&mut sse_buffer) {
+                let data = event
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("data:"))
+                    .map(str::trim)
+                    .collect::<Vec<_>>()
+                    .join("");
 
-                // Execute each tool call sequentially.
-                for call in calls {
-                    // Check cancellation between tool executions.
-                    if cancel.is_cancelled() {
-                        return Err(AppError::message("cancelled"));
-                    }
-
-                    let _ = on_event(AgentEvent::ToolCall {
-                        tool_name: call.function.name.clone(),
-                        tool_input: call.function.arguments.clone(),
-                        call_id: call.id.clone(),
-                    });
-
-                    // Parse arguments from JSON string to Value.
-                    let args: Value =
-                        serde_json::from_str(&call.function.arguments).unwrap_or(Value::Object(
-                            serde_json::Map::new(),
-                        ));
-
-                    let tool_result = tools.execute(&call.function.name, &args).await;
-
-                    let success = tool_result.success;
-                    let output = if success {
-                        tool_result.output.clone()
-                    } else {
-                        format!("Tool error: {}", tool_result.error.as_deref().unwrap_or("unknown"))
-                    };
-
-                    let _ = on_event(AgentEvent::ToolResult {
-                        call_id: call.id.clone(),
-                        tool_name: call.function.name.clone(),
-                        success,
-                        output: truncate_for_event(&output, 2000),
-                    });
-
-                    tool_call_records.push(ToolCallRecord {
-                        call_id: call.id.clone(),
-                        tool_name: call.function.name.clone(),
-                        arguments: call.function.arguments.clone(),
-                        result: output.clone(),
-                        success,
-                    });
-
-                    // Append the tool result message for the model.
-                    messages.push(serde_json::json!({
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": output,
-                    }));
+                if data.is_empty() || data == "[DONE]" {
+                    continue;
                 }
 
-                // Continue the loop -- the model will see the tool results.
-                continue;
+                let json: Value = match serde_json::from_str(&data) {
+                    Ok(v) => v,
+                    Err(err) => {
+                        error!("agent: failed to parse SSE data: {err}");
+                        continue;
+                    }
+                };
+
+                // Extract finish_reason
+                if let Some(reason) = json
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .and_then(|c| c.first())
+                    .and_then(|c| c.get("finish_reason"))
+                    .and_then(Value::as_str)
+                {
+                    finish_reason = reason.to_string();
+                }
+
+                // Extract reasoning/thinking content (xAI reasoning models)
+                if let Some(reasoning) = json
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .and_then(|c| c.first())
+                    .and_then(|c| c.get("delta"))
+                    .and_then(|d| d.get("reasoning_content"))
+                    .and_then(Value::as_str)
+                {
+                    if !reasoning.is_empty() {
+                        let _ = on_event(AgentEvent::ReasoningDelta {
+                            text: reasoning.to_string(),
+                        });
+                    }
+                }
+
+                // Extract text content delta
+                if let Some(delta_text) = json
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .and_then(|c| c.first())
+                    .and_then(|c| c.get("delta"))
+                    .and_then(|d| d.get("content"))
+                    .and_then(Value::as_str)
+                {
+                    if !delta_text.is_empty() {
+                        content_buffer.push_str(delta_text);
+                        let _ = on_event(AgentEvent::TextDelta {
+                            text: delta_text.to_string(),
+                        });
+                    }
+                }
+
+                // Accumulate tool call deltas
+                if let Some(tool_calls_arr) = json
+                    .get("choices")
+                    .and_then(Value::as_array)
+                    .and_then(|c| c.first())
+                    .and_then(|c| c.get("delta"))
+                    .and_then(|d| d.get("tool_calls"))
+                    .and_then(Value::as_array)
+                {
+                    for tc_delta in tool_calls_arr {
+                        tool_acc.push_delta(tc_delta);
+                    }
+                }
+
+                // Extract usage from the final chunk
+                if let Some(usage_val) = json.get("usage") {
+                    if let Some(pt) = usage_val
+                        .get("prompt_tokens")
+                        .and_then(Value::as_u64)
+                        .or_else(|| usage_val.get("input_tokens").and_then(Value::as_u64))
+                    {
+                        total_usage.input_tokens =
+                            Some(total_usage.input_tokens.unwrap_or(0) + pt);
+                    }
+                    if let Some(ct) = usage_val
+                        .get("completion_tokens")
+                        .and_then(Value::as_u64)
+                        .or_else(|| usage_val.get("output_tokens").and_then(Value::as_u64))
+                    {
+                        total_usage.output_tokens =
+                            Some(total_usage.output_tokens.unwrap_or(0) + ct);
+                    }
+                }
+
+                // Check for inline errors
+                if let Some(err_msg) = json
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(Value::as_str)
+                {
+                    error!("agent: API returned error in stream: {err_msg}");
+                    return Err(AppError::message(err_msg));
+                }
             }
         }
 
-        // -- Case 2: model produced a final text response -------------------
-        let final_text = assistant_content.unwrap_or_default();
+        // -- Process streamed response --------------------------------------
+        let tool_calls = tool_acc.finish();
 
-        if !final_text.is_empty() {
-            let _ = on_event(AgentEvent::TextDelta {
-                text: final_text.clone(),
-            });
+        debug!(
+            "agent: iteration {} complete — content_len={}, tool_calls={}, finish={}",
+            iterations,
+            content_buffer.len(),
+            tool_calls.len(),
+            finish_reason,
+        );
+
+        // Case 1: model wants to call tools
+        if !tool_calls.is_empty() {
+            // Append the assistant message with tool_calls to history.
+            let assistant_msg = build_assistant_message_with_tool_calls(
+                if content_buffer.is_empty() {
+                    None
+                } else {
+                    Some(&content_buffer)
+                },
+                &tool_calls,
+            );
+            messages.push(assistant_msg);
+
+            // Execute each tool call sequentially.
+            for call in &tool_calls {
+                if cancel.is_cancelled() {
+                    return Err(AppError::message("cancelled"));
+                }
+
+                // -- Permission check ---------------------------------------
+                let perm = config.permissions.get(&call.function.name);
+
+                if perm == crate::permissions::ToolPermission::Deny {
+                    // Tool is blocked — tell the model.
+                    let denial = format!(
+                        "Tool '{}' is denied by the current permission policy.",
+                        call.function.name
+                    );
+                    let _ = on_event(AgentEvent::ToolResult {
+                        call_id: call.id.clone(),
+                        tool_name: call.function.name.clone(),
+                        success: false,
+                        output: denial.clone(),
+                    });
+                    messages.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": denial,
+                    }));
+                    continue;
+                }
+
+                if perm == crate::permissions::ToolPermission::Ask {
+                    // Emit a permission request and wait for approval.
+                    let _ = on_event(AgentEvent::PermissionRequest {
+                        call_id: call.id.clone(),
+                        tool_name: call.function.name.clone(),
+                        tool_input: call.function.arguments.clone(),
+                        reason: format!(
+                            "'{}' requires approval before execution.",
+                            call.function.name
+                        ),
+                    });
+
+                    let approved = if let Some(ref mut rx) = approval_rx {
+                        // Wait for the frontend to send a decision (or cancel).
+                        tokio::select! {
+                            decision = rx.recv() => {
+                                decision
+                                    .map(|d| d.approved)
+                                    .unwrap_or(false)
+                            }
+                            _ = cancel.cancelled() => {
+                                return Err(AppError::message("cancelled"));
+                            }
+                        }
+                    } else {
+                        // No approval channel — auto-approve.
+                        true
+                    };
+
+                    if !approved {
+                        let denial = format!(
+                            "User denied execution of '{}'.",
+                            call.function.name
+                        );
+                        let _ = on_event(AgentEvent::ToolResult {
+                            call_id: call.id.clone(),
+                            tool_name: call.function.name.clone(),
+                            success: false,
+                            output: denial.clone(),
+                        });
+                        messages.push(serde_json::json!({
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": denial,
+                        }));
+                        continue;
+                    }
+                }
+
+                // -- Execute the tool ---------------------------------------
+                let _ = on_event(AgentEvent::Thinking {
+                    message: format!("Running {}...", call.function.name),
+                    phase: Some("tool_exec".into()),
+                });
+
+                let _ = on_event(AgentEvent::ToolCall {
+                    tool_name: call.function.name.clone(),
+                    tool_input: call.function.arguments.clone(),
+                    call_id: call.id.clone(),
+                });
+
+                let args: Value =
+                    serde_json::from_str(&call.function.arguments).unwrap_or(Value::Object(
+                        serde_json::Map::new(),
+                    ));
+
+                let tool_result = tools.execute(&call.function.name, &args).await;
+
+                let success = tool_result.success;
+                let output = if success {
+                    tool_result.output.clone()
+                } else {
+                    format!(
+                        "Tool error: {}",
+                        tool_result.error.as_deref().unwrap_or("unknown")
+                    )
+                };
+
+                let _ = on_event(AgentEvent::ToolResult {
+                    call_id: call.id.clone(),
+                    tool_name: call.function.name.clone(),
+                    success,
+                    output: truncate_for_event(&output, 2000),
+                });
+
+                tool_call_records.push(ToolCallRecord {
+                    call_id: call.id.clone(),
+                    tool_name: call.function.name.clone(),
+                    arguments: call.function.arguments.clone(),
+                    result: output.clone(),
+                    success,
+                });
+
+                // Append the tool result message for the model (truncated to
+                // avoid blowing up the context window).
+                messages.push(serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": truncate_for_context(&output),
+                }));
+            }
+
+            // Continue the loop — the model will see the tool results.
+            continue;
         }
 
+        // Case 2: model produced a final text response (already streamed
+        // via TextDelta events above).
         let _ = on_event(AgentEvent::Complete {
-            text: final_text.clone(),
+            text: content_buffer.clone(),
             iterations,
         });
 
         return Ok(AgentLoopResult {
-            final_text,
+            final_text: content_buffer,
             iterations,
             tool_calls_made: tool_call_records,
             usage: total_usage,
@@ -398,10 +716,7 @@ pub async fn run_agent(
 
 /// Builds an assistant message JSON value that includes tool_calls, matching
 /// the OpenAI chat format expected by the API on subsequent turns.
-fn build_assistant_message_with_tool_calls(
-    content: Option<&str>,
-    calls: &[ToolCall],
-) -> Value {
+fn build_assistant_message_with_tool_calls(content: Option<&str>, calls: &[ToolCall]) -> Value {
     let tool_calls_json: Vec<Value> = calls
         .iter()
         .map(|c| {
@@ -434,6 +749,18 @@ fn extract_api_error(body: &str) -> Option<String> {
     parsed.error?.message
 }
 
+/// Extract a single SSE event from the buffer, consuming it.
+fn take_sse_event(buffer: &mut String) -> Option<String> {
+    let normalized = buffer.replace("\r\n", "\n");
+    *buffer = normalized;
+    if let Some(index) = buffer.find("\n\n") {
+        let event = buffer[..index].to_string();
+        *buffer = buffer[index + 2..].to_string();
+        return Some(event);
+    }
+    None
+}
+
 /// Truncate a string for display in events (the full result is still stored in
 /// the `ToolCallRecord`).
 fn truncate_for_event(s: &str, max_len: usize) -> String {
@@ -444,4 +771,22 @@ fn truncate_for_event(s: &str, max_len: usize) -> String {
         truncated.push_str("...[truncated]");
         truncated
     }
+}
+
+/// Truncate tool output for inclusion in the LLM message history.
+/// Keeps the first and last portions so the model can still reason about the
+/// output without blowing up the context window.
+const MAX_TOOL_OUTPUT_FOR_CONTEXT: usize = 30_000; // ~7.5K tokens
+
+fn truncate_for_context(s: &str) -> String {
+    if s.len() <= MAX_TOOL_OUTPUT_FOR_CONTEXT {
+        return s.to_string();
+    }
+    let keep = MAX_TOOL_OUTPUT_FOR_CONTEXT / 2;
+    let total_bytes = s.len();
+    let head = &s[..keep];
+    let tail = &s[total_bytes - keep..];
+    format!(
+        "{head}\n\n... [truncated {total_bytes} bytes → showing first and last {keep} bytes] ...\n\n{tail}"
+    )
 }

@@ -3,13 +3,18 @@ mod db;
 mod editor;
 mod error;
 mod hands;
+mod hooks;
 mod keychain;
+mod permissions;
+mod prompts;
 mod providers;
+mod sub_agent;
 mod realtime_proxy;
 mod terminal;
 mod tools;
 mod types;
 mod window;
+mod workflows;
 mod workspace;
 
 use std::sync::{Arc, Mutex};
@@ -47,6 +52,8 @@ struct AppState {
     db: Database,
     providers: ProviderService,
     streams: Mutex<std::collections::HashMap<String, CancellationToken>>,
+    /// Senders for tool-call approval decisions, keyed by stream ID.
+    approval_senders: Mutex<std::collections::HashMap<String, tokio::sync::mpsc::Sender<agent::ToolApproval>>>,
     terminals: TerminalRegistry,
     hands: HandsService,
     realtime_proxy: Mutex<Option<realtime_proxy::RealtimeProxy>>,
@@ -705,6 +712,17 @@ async fn send_message(
                     )?;
                     Ok(())
                 },
+                |reasoning| {
+                    app.emit(
+                        "chat://reasoning",
+                        serde_json::json!({
+                            "streamId": &stream_id,
+                            "messageId": &assistant_message.id,
+                            "text": reasoning,
+                        }),
+                    )?;
+                    Ok(())
+                },
             )
             .await;
 
@@ -800,6 +818,31 @@ fn cancel_stream(state: State<'_, AppState>, stream_id: String) -> Result<(), St
 }
 
 #[tauri::command]
+fn list_workflows() -> Result<Vec<(String, String, String)>, String> {
+    Ok(workflows::list_workflows())
+}
+
+#[tauri::command]
+fn approve_tool_call(
+    state: State<'_, AppState>,
+    stream_id: String,
+    call_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    let senders = state
+        .approval_senders
+        .lock()
+        .map_err(|_| "approval senders lock poisoned".to_string())?;
+    if let Some(tx) = senders.get(&stream_id) {
+        let _ = tx.try_send(agent::ToolApproval {
+            call_id,
+            approved,
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn send_agent_message(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -883,6 +926,15 @@ async fn send_agent_message(
         providers.require_api_key_public().map_err(to_command_error)?
     };
 
+    // Create approval channel — sender goes into shared map (for the
+    // approve_tool_call command), receiver moves into the agent spawn.
+    let (approval_tx, mut approval_rx) = tokio::sync::mpsc::channel::<agent::ToolApproval>(8);
+    state
+        .approval_senders
+        .lock()
+        .map_err(|_| "approval senders lock poisoned".to_string())?
+        .insert(stream_id.clone(), approval_tx);
+
     tauri::async_runtime::spawn(async move {
         let emit_started = app.emit(
             "chat://stream",
@@ -916,7 +968,13 @@ async fn send_agent_message(
             }));
         }
 
-        let system_prompt = providers::base_system_prompt(&workspace_context);
+        // Load saved agent memories for context
+        let memories = db.list_agent_memories().unwrap_or_default();
+        let memory_pairs: Vec<(String, String)> = memories
+            .iter()
+            .map(|m| (m.key.clone(), m.value.clone()))
+            .collect();
+        let system_prompt = prompts::agent_system_prompt(&workspace_context, &memory_pairs);
 
         let agent_config = agent::AgentConfig {
             model_id: input.model_id.clone(),
@@ -928,8 +986,25 @@ async fn send_agent_message(
             } else {
                 None
             },
+            permissions: permissions::PermissionConfig::defaults(),
+            allowed_tools: input.allowed_tools.clone(),
+            max_output_tokens: input.max_output_tokens.or(Some(16384)),
         };
-        let tool_registry = tools::ToolRegistry::new(workspace_roots);
+        let sub_ctx = sub_agent::SubAgentContext {
+            client: providers.client().clone(),
+            api_key: api_key.clone(),
+            endpoint_url: if is_ollama {
+                Some(providers::ProviderService::ollama_chat_endpoint().to_string())
+            } else {
+                None
+            },
+            workspace_roots: workspace_roots.clone(),
+            db: Some(db.clone()),
+            permissions: permissions::PermissionConfig::defaults(),
+        };
+        let tool_registry = tools::ToolRegistry::new(workspace_roots)
+            .with_db(db.clone())
+            .with_sub_agent_ctx(sub_ctx, input.model_id.clone(), cancel.clone());
 
         let result = agent::run_agent(
             providers.client(),
@@ -939,12 +1014,70 @@ async fn send_agent_message(
             &tool_registry,
             cancel.clone(),
             |event| {
-                // Forward agent events to frontend
-                let _ = app_ref.emit("agent://event", serde_json::json!({
+                // Build a flat JSON object matching the frontend AgentEvent interface
+                let mut flat = serde_json::json!({
                     "streamId": &stream_id_ref,
                     "messageId": &msg_id_ref,
-                    "event": event,
-                }));
+                });
+                match &event {
+                    agent::AgentEvent::Thinking { message, phase } => {
+                        flat["kind"] = "thinking".into();
+                        flat["thinkingMessage"] = message.clone().into();
+                        if let Some(p) = phase {
+                            flat["phase"] = p.clone().into();
+                        }
+                    }
+                    agent::AgentEvent::ToolCall { tool_name, tool_input, call_id } => {
+                        flat["kind"] = "tool_call".into();
+                        flat["toolName"] = tool_name.clone().into();
+                        flat["toolArgs"] = tool_input.clone().into();
+                        flat["callId"] = call_id.clone().into();
+                    }
+                    agent::AgentEvent::ToolResult { call_id, tool_name, success, output } => {
+                        flat["kind"] = "tool_result".into();
+                        flat["callId"] = call_id.clone().into();
+                        flat["toolName"] = tool_name.clone().into();
+                        flat["toolSuccess"] = (*success).into();
+                        flat["toolResult"] = output.clone().into();
+                    }
+                    agent::AgentEvent::ReasoningDelta { text } => {
+                        flat["kind"] = "reasoning_delta".into();
+                        flat["textDelta"] = text.clone().into();
+                    }
+                    agent::AgentEvent::SubAgentStarted { agent_id, label } => {
+                        flat["kind"] = "sub_agent_started".into();
+                        flat["agentId"] = agent_id.clone().into();
+                        flat["label"] = label.clone().into();
+                    }
+                    agent::AgentEvent::SubAgentComplete { agent_id, label, success, summary } => {
+                        flat["kind"] = "sub_agent_complete".into();
+                        flat["agentId"] = agent_id.clone().into();
+                        flat["label"] = label.clone().into();
+                        flat["toolSuccess"] = (*success).into();
+                        flat["summary"] = summary.clone().into();
+                    }
+                    agent::AgentEvent::TextDelta { text } => {
+                        flat["kind"] = "text_delta".into();
+                        flat["textDelta"] = text.clone().into();
+                    }
+                    agent::AgentEvent::Complete { text: _, iterations } => {
+                        flat["kind"] = "complete".into();
+                        flat["iterations"] = (*iterations).into();
+                    }
+                    agent::AgentEvent::PermissionRequest { call_id, tool_name, tool_input, reason } => {
+                        flat["kind"] = "permission_request".into();
+                        flat["callId"] = call_id.clone().into();
+                        flat["toolName"] = tool_name.clone().into();
+                        flat["toolArgs"] = tool_input.clone().into();
+                        flat["reason"] = reason.clone().into();
+                    }
+                    agent::AgentEvent::Error { message } => {
+                        flat["kind"] = "error".into();
+                        flat["error"] = message.clone().into();
+                    }
+                }
+                let _ = app_ref.emit("agent://event", flat);
+
                 // Also emit text deltas through the regular stream channel
                 if let agent::AgentEvent::TextDelta { ref text } = event {
                     let _ = app_ref.emit(
@@ -961,6 +1094,7 @@ async fn send_agent_message(
                 }
                 Ok(())
             },
+            Some(&mut approval_rx),
         )
         .await;
 
@@ -1037,14 +1171,17 @@ async fn send_agent_message(
             }
         }
 
-        if let Ok(mut registry) = app
+        // Clean up stream and approval sender entries.
+        let _ = app
             .state::<AppState>()
             .streams
             .lock()
-            .map_err(|_| AppError::message("stream registry lock poisoned"))
-        {
-            registry.remove(&stream_id);
-        }
+            .map(|mut r| { r.remove(&stream_id); });
+        let _ = app
+            .state::<AppState>()
+            .approval_senders
+            .lock()
+            .map(|mut r| { r.remove(&stream_id); });
     });
 
     Ok(handle)
@@ -2120,6 +2257,7 @@ pub fn run() {
             db: database.clone(),
             providers: providers.clone(),
             streams: Mutex::new(std::collections::HashMap::new()),
+            approval_senders: Mutex::new(std::collections::HashMap::new()),
             terminals: Mutex::new(std::collections::HashMap::new()),
             hands: HandsService::new(database.clone(), providers),
             realtime_proxy: Mutex::new(None),
@@ -2148,6 +2286,8 @@ pub fn run() {
             send_message,
             send_agent_message,
             cancel_stream,
+            approve_tool_call,
+            list_workflows,
             start_terminal,
             create_terminal,
             launch_asciivision,

@@ -124,6 +124,44 @@ impl Database {
               updated_at TEXT NOT NULL,
               FOREIGN KEY (category_id) REFERENCES media_categories(id) ON DELETE SET NULL
             );
+            CREATE TABLE IF NOT EXISTS agent_memory (
+              id          TEXT PRIMARY KEY,
+              key         TEXT NOT NULL UNIQUE,
+              value       TEXT NOT NULL,
+              created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS agent_rules (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                tool_pattern TEXT NOT NULL,
+                input_field TEXT,
+                input_pattern TEXT,
+                action      TEXT NOT NULL,
+                message     TEXT NOT NULL DEFAULT '',
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS agent_profiles (
+                id              TEXT PRIMARY KEY,
+                name            TEXT NOT NULL,
+                system_prompt   TEXT NOT NULL DEFAULT '',
+                model_id        TEXT,
+                allowed_tools   TEXT,
+                max_iterations  INTEGER DEFAULT 25,
+                is_default      INTEGER DEFAULT 0,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS agent_sessions (
+                id                TEXT PRIMARY KEY,
+                conversation_id   TEXT NOT NULL,
+                config_json       TEXT NOT NULL,
+                messages_json     TEXT NOT NULL,
+                status            TEXT NOT NULL DEFAULT 'running',
+                current_iteration INTEGER DEFAULT 0,
+                created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             "#,
         )?;
         ensure_column(&conn, "messages", "tool_calls_json", "TEXT")?;
@@ -182,6 +220,47 @@ impl Database {
                 params![id, name, Utc::now().to_rfc3339()],
             )?;
         }
+
+        // Seed built-in agent profiles
+        for (id, name, prompt, tools) in [
+            (
+                "builtin-full-agent",
+                "Full Agent",
+                "You are a full-capability coding agent with access to all tools.",
+                "", // empty = all tools
+            ),
+            (
+                "builtin-code-reviewer",
+                "Code Reviewer",
+                "You are a code review specialist. Analyze code for bugs, security issues, style problems, and suggest improvements. Do NOT modify files.",
+                "read_file,grep,find_definition,tree,search_files,git_diff,git_status,git_log,list_directory",
+            ),
+            (
+                "builtin-explorer",
+                "Explorer",
+                "You are a codebase exploration agent. Help the user understand project structure, find files, and explain code. Do NOT modify anything.",
+                "read_file,list_directory,search_files,grep,tree,find_definition,git_log,git_status,memory_save,memory_recall",
+            ),
+            (
+                "builtin-writer",
+                "Writer",
+                "You are a code writer. Focus on implementing changes requested by the user. Read files to understand context, then make targeted edits.",
+                "read_file,write_file,edit_file,list_directory,search_files,grep,find_definition,tree,bash,git_status,git_diff,git_add,git_commit,mkdir,touch",
+            ),
+        ] {
+            conn.execute(
+                r#"INSERT OR IGNORE INTO agent_profiles (id, name, system_prompt, allowed_tools, is_default)
+                   VALUES (?1, ?2, ?3, ?4, ?5)"#,
+                params![
+                    id,
+                    name,
+                    prompt,
+                    if tools.is_empty() { None::<&str> } else { Some(tools) },
+                    id == "builtin-full-agent",
+                ],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -999,6 +1078,165 @@ impl Database {
         )?;
         Ok(())
     }
+
+    // -------------------------------------------------------------------
+    // Agent memory
+    // -------------------------------------------------------------------
+
+    pub fn upsert_agent_memory(&self, key: &str, value: &str) -> AppResult<()> {
+        let conn = self.connect()?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            r#"INSERT INTO agent_memory (id, key, value, created_at, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?4)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"#,
+            params![uuid::Uuid::new_v4().to_string(), key, value, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_agent_memory(&self, key: &str) -> AppResult<bool> {
+        let conn = self.connect()?;
+        let count = conn.execute("DELETE FROM agent_memory WHERE key = ?1", params![key])?;
+        Ok(count > 0)
+    }
+
+    pub fn list_agent_memories(&self) -> AppResult<Vec<AgentMemory>> {
+        let conn = self.connect()?;
+        let mut stmt =
+            conn.prepare("SELECT id, key, value, created_at, updated_at FROM agent_memory ORDER BY key")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AgentMemory {
+                id: row.get(0)?,
+                key: row.get(1)?,
+                value: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
+    pub fn search_agent_memories(&self, query: &str) -> AppResult<Vec<AgentMemory>> {
+        let conn = self.connect()?;
+        let pattern = format!("%{query}%");
+        let mut stmt = conn.prepare(
+            "SELECT id, key, value, created_at, updated_at FROM agent_memory
+             WHERE key LIKE ?1 OR value LIKE ?1 ORDER BY key",
+        )?;
+        let rows = stmt.query_map(params![pattern], |row| {
+            Ok(AgentMemory {
+                id: row.get(0)?,
+                key: row.get(1)?,
+                value: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
+    // -------------------------------------------------------------------
+    // Agent profiles
+    // -------------------------------------------------------------------
+
+    pub fn list_agent_profiles(&self) -> AppResult<Vec<(String, String, Option<String>, Option<String>, Option<i64>, bool)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, model_id, allowed_tools, max_iterations, is_default FROM agent_profiles ORDER BY name"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, bool>(5)?,
+            ))
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
+    pub fn upsert_agent_profile(
+        &self,
+        id: &str,
+        name: &str,
+        system_prompt: &str,
+        model_id: Option<&str>,
+        allowed_tools: Option<&str>,
+        max_iterations: Option<i64>,
+    ) -> AppResult<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            r#"INSERT INTO agent_profiles (id, name, system_prompt, model_id, allowed_tools, max_iterations)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+               ON CONFLICT(id) DO UPDATE SET name=excluded.name, system_prompt=excluded.system_prompt,
+               model_id=excluded.model_id, allowed_tools=excluded.allowed_tools, max_iterations=excluded.max_iterations"#,
+            rusqlite::params![id, name, system_prompt, model_id, allowed_tools, max_iterations],
+        )?;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // Agent sessions
+    // -------------------------------------------------------------------
+
+    pub fn save_agent_session(
+        &self,
+        id: &str,
+        conversation_id: &str,
+        config_json: &str,
+        messages_json: &str,
+        status: &str,
+        current_iteration: i64,
+    ) -> AppResult<()> {
+        let conn = self.connect()?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            r#"INSERT INTO agent_sessions (id, conversation_id, config_json, messages_json, status, current_iteration, created_at, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+               ON CONFLICT(id) DO UPDATE SET messages_json=excluded.messages_json, status=excluded.status,
+               current_iteration=excluded.current_iteration, updated_at=excluded.updated_at"#,
+            rusqlite::params![id, conversation_id, config_json, messages_json, status, current_iteration, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_agent_session(&self, conversation_id: &str) -> AppResult<Option<(String, String, String, String, i64)>> {
+        let conn = self.connect()?;
+        let result = conn.query_row(
+            "SELECT id, config_json, messages_json, status, current_iteration FROM agent_sessions WHERE conversation_id = ?1 AND status = 'running' ORDER BY updated_at DESC LIMIT 1",
+            rusqlite::params![conversation_id],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            )),
+        ).optional()?;
+        Ok(result)
+    }
+
+    pub fn complete_agent_session(&self, id: &str, status: &str) -> AppResult<()> {
+        let conn = self.connect()?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE agent_sessions SET status = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![id, status, now],
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentMemory {
+    pub id: String,
+    pub key: String,
+    pub value: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 fn map_workspace_item(

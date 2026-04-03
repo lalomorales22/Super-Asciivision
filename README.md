@@ -15,11 +15,11 @@ Click the rainbow **ASCIIVISION** button in the nav bar to drop into the termina
 
 | Page | What it does |
 |------|-------------|
-| **Chat** | Streamed conversations with xAI or Ollama models, workspace-backed context, agentic tool use (file read/write, shell commands, search) |
+| **Chat** | Streamed conversations with xAI or Ollama models, workspace-backed context, full agentic IDE assistant with 22 tools, sub-agent orchestration, permission system, predefined workflows (`/explore`, `/implement`, `/review`, `/fix`), and persistent agent memory |
 | **Image & Video** | Image and video generation via xAI or locally with Ollama (FLUX models), category-organized gallery |
 | **Voice & Audio** | Text-to-speech generation and live realtime voice chat |
 | **Media Editor** | Timeline-based export workflow via ffmpeg |
-| **IDE** | File explorer with right-click context menu (new file, rename, delete, open in terminal), multi-tab code editor with syntax highlighting, AI copilot (xAI or Ollama), Quick Open (Cmd+P), browser preview — opens without a workspace |
+| **IDE** | File explorer with right-click context menu (new file, rename, delete, open in terminal), multi-tab code editor with syntax highlighting, AI agent copilot with 22 tools (read/write/edit files, bash, git, grep, tree, web fetch, sub-agents), Quick Open (Cmd+P), browser preview — opens without a workspace |
 | **Tiles** | 1x2, 2x2, or 3x3 grid of independent PTY terminal sessions |
 | **Music** | Built-in player — MP3/WAV/OGG/FLAC/M4A/AAC/OPUS/WMA, metadata display, hideable mini-player bar, shuffle/repeat, playlist/category sidebar with drag-and-drop import |
 | **Hands** | Mobile bridge — pair your phone over WiFi (zero setup) or deploy a relay for remote access. Chat, generate media, and access your workspace from your phone |
@@ -70,6 +70,71 @@ Any format works — `192.168.1.100:8000`, `ws://192.168.1.100:8000`, or `ws:192
 ```
 
 Each connected user's webcam feed is encoded as colored ASCII art and streamed over WebSocket in real time. The video feeds panel shows a tiled grid of all participants. The connected-users panel shows who's online.
+
+---
+
+## Agent System
+
+The Chat and IDE pages include a full autonomous coding agent that can read, write, search, and execute code in your workspace. Toggle **Agent Mode** in the chat composer to activate it.
+
+### Tools (22 built-in)
+
+| Category | Tools |
+|----------|-------|
+| **File I/O** | `read_file` (with line ranges), `write_file`, `edit_file` (find-replace with diff output, `replace_all` support) |
+| **Navigation** | `list_directory`, `search_files` (glob), `grep` (regex), `tree` (recursive), `find_definition` (language-aware) |
+| **Shell & Git** | `bash`, `git_status`, `git_diff`, `git_log`, `git_commit`, `git_add`, `git_checkout` |
+| **Web** | `web_fetch` (HTTP GET with HTML stripping) |
+| **Memory** | `memory_save`, `memory_recall` (persistent across conversations) |
+| **Sub-agents** | `spawn_agent`, `spawn_agents_parallel` (delegate tasks to focused child agents) |
+| **Filesystem** | `mkdir`, `touch` |
+
+### Sub-Agent Orchestration
+
+The agent can spawn focused sub-agents that run in parallel with their own tool scope and model. Use cases:
+- Explore multiple areas of a codebase simultaneously
+- Run independent code reviews in parallel
+- Delegate simple lookups to a fast model while the main agent reasons with a powerful one
+
+Model routing: `"fast"` for quick lookups, `"best"` for complex reasoning, `"default"` for the current model.
+
+### Permission System
+
+Tools are categorized as **Allow** (runs immediately), **Ask** (pauses for user approval), or **Deny** (blocked). Destructive tools like `bash`, `git_commit`, and `git_checkout` require approval by default. The approval UI shows the command and lets you approve or deny inline.
+
+### Safety Hooks
+
+Built-in safety rules block dangerous operations before they execute:
+- `rm -rf /` and `sudo` commands are blocked
+- `git push --force` is blocked
+- `curl | sh` triggers a warning
+- Writing to `.env` files triggers a warning
+
+### Predefined Workflows
+
+Type a slash command in the chat composer to trigger a multi-phase workflow:
+
+| Command | What it does |
+|---------|-------------|
+| `/explore` | Scan project structure, read key files, summarize architecture |
+| `/implement` | Understand request, explore code, plan, implement, review |
+| `/review` | Gather git changes, analyze for issues, write review summary |
+| `/fix` | Understand bug, find root cause, implement fix, verify |
+
+### Agent Profiles
+
+Four built-in profiles control what the agent can do:
+
+| Profile | Description |
+|---------|-------------|
+| **Full Agent** | All 22 tools available (default) |
+| **Code Reviewer** | Read-only tools — analyzes code without modifying anything |
+| **Explorer** | Read-only navigation + memory — for understanding codebases |
+| **Writer** | File I/O + shell + git — focused on implementing changes |
+
+### Agent Memory
+
+The agent can save facts across conversations using `memory_save` and `memory_recall`. Memories are stored in SQLite and injected into the system prompt automatically. Useful for remembering project conventions, user preferences, and important decisions.
 
 ---
 
@@ -229,29 +294,31 @@ Open **Settings** in the app and add your API keys for Claude, OpenAI, and Gemin
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────┐
-│  Super ASCIIVision (Tauri 2)                          │
-│                                                       │
-│  Frontend (React/TS)              Backend (Rust)      │
-│  ┌─────────────────────────┐    ┌──────────────────┐  │
-│  │ App.tsx (boot wrapper)  │◄IPC►│ lib.rs (commands)│  │
-│  │ pages/ (8 lazy-loaded)  │    │ terminal.rs (PTY)│  │
-│  │ components/ (shared UI) │    │ hands.rs (mobile)│  │
-│  │ store/ (8 Zustand)      │    │ agent.rs (tools) │  │
-│  │ utils/ (8 pure fn libs) │    │ providers.rs     │  │
-│  │ hooks/ (useDragResize)  │    │ db.rs (SQLite)   │  │
-│  │ lib/tauri.ts (bridge)   │    │ keychain.rs      │  │
-│  └─────────────────────────┘    └────────┬─────────┘  │
-│         │                                │ sidecar     │
-│         │ xterm.js                       │             │
-│         ▼                                │             │
-│  ┌──────────────────┐                    │             │
-│  │ ASCIIVision Panel │◄──────PTY─────────┘             │
-│  │ (inline terminal) │                                 │
-│  └──────────────────┘                                  │
-│                                                       │
-│  ASCIIVision Core (Rust/ratatui, 18 files, ~11.6K)    │
-└───────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Super ASCIIVision (Tauri 2)                                     │
+│                                                                  │
+│  Frontend (React/TS)                Backend (Rust)               │
+│  ┌─────────────────────────┐      ┌────────────────────────────┐ │
+│  │ App.tsx (boot wrapper)  │◄IPC─►│ lib.rs (commands)          │ │
+│  │ pages/ (8 lazy-loaded)  │      │ agent.rs (streaming loop)  │ │
+│  │ components/             │      │ sub_agent.rs (orchestrate) │ │
+│  │   AgentToolCard.tsx     │      │ tools.rs (22 tools)        │ │
+│  │   AgentProgressPanel.tsx│      │ hooks.rs (safety rules)    │ │
+│  │ store/ (8 Zustand)      │      │ permissions.rs (allow/ask) │ │
+│  │ utils/                  │      │ workflows.rs (4 workflows) │ │
+│  │   fileLinks.ts          │      │ prompts.rs (system prompt) │ │
+│  │ lib/tauri.ts (bridge)   │      │ providers.rs (xAI/Ollama)  │ │
+│  └─────────────────────────┘      │ db.rs (SQLite + 10 tables) │ │
+│         │                         │ terminal.rs (PTY)          │ │
+│         │ xterm.js                │ hands.rs (mobile bridge)   │ │
+│         ▼                         │ keychain.rs                │ │
+│  ┌──────────────────┐             └────────────┬───────────────┘ │
+│  │ ASCIIVision Panel │◄──────PTY───────────────┘                 │
+│  │ (inline terminal) │                                           │
+│  └──────────────────┘                                            │
+│                                                                  │
+│  ASCIIVision Core (Rust/ratatui, 18 files, ~11.6K)               │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 **Frontend architecture:** The UI is split into 8 lazy-loaded page components, 8 domain-specific Zustand stores (chat, media, workspace, music, terminal, settings, hands, tiles), shared components, utility libraries, and custom hooks. Error boundaries wrap page content. List items use `React.memo` and the music track list is virtualized with `react-window`.
@@ -347,6 +414,8 @@ cargo test --manifest-path src-tauri/Cargo.toml     # Backend tests
 │   │   └── HandsPage.tsx       #   Mobile bridge setup
 │   ├── components/             # Shared UI (memo'd list items, layout shell)
 │   │   ├── layout/             #   GrokShell, TopBar, HistoryRail, panels, sidebars
+│   │   ├── AgentToolCard.tsx   #   Collapsible tool call card with status + diff
+│   │   ├── AgentProgressPanel.tsx # Agent thinking, progress, approval UI, sub-agents
 │   │   ├── MessageBubble.tsx   #   Chat message (React.memo)
 │   │   ├── CodeBlock.tsx       #   Syntax-highlighted code (React.memo)
 │   │   └── ...                 #   NavTab, ToolCallBlock, ErrorBoundary, etc.
@@ -359,16 +428,23 @@ cargo test --manifest-path src-tauri/Cargo.toml     # Backend tests
 │   │   ├── terminalStore.ts    #   Terminal PTY, browser preview
 │   │   ├── handsStore.ts       #   Hands service status
 │   │   └── tileStore.ts        #   Terminal tile layout
-│   ├── utils/                  # 8 pure function libraries (with unit tests)
+│   ├── utils/                  # Pure function libraries (with unit tests)
+│   │   ├── fileLinks.ts        #   Extract file:line links from agent text
 │   ├── hooks/                  # Custom hooks (useDragResize, etc.)
 │   └── lib/tauri.ts            # IPC bridge to Rust backend
-├── src-tauri/                  # Rust backend (15 source files, ~10.3K lines)
-│   ├── src/lib.rs              # Tauri commands — chat, media, terminal, music
-│   ├── src/agent.rs            # Agentic tool-use loop
+├── src-tauri/                  # Rust backend (21 source files)
+│   ├── src/lib.rs              # Tauri commands — chat, media, terminal, music, agent
+│   ├── src/agent.rs            # Streaming agentic loop with tool-call accumulation
+│   ├── src/sub_agent.rs        # Sub-agent orchestration (parallel, model routing)
+│   ├── src/tools.rs            # 22 tools + Tool trait for extensibility
+│   ├── src/hooks.rs            # Pre/post tool-use safety hooks + rule engine
+│   ├── src/permissions.rs      # Allow/Ask/Deny per-tool permission system
+│   ├── src/workflows.rs        # Predefined multi-phase workflows (explore/implement/review/fix)
+│   ├── src/prompts.rs          # System prompt builder with tool guidance + memory
 │   ├── src/terminal.rs         # PTY session management
 │   ├── src/hands.rs            # Mobile bridge service
 │   ├── src/providers.rs        # xAI + Ollama API integration
-│   ├── src/db.rs               # SQLite persistence
+│   ├── src/db.rs               # SQLite persistence (10 tables incl. memory/profiles/sessions)
 │   ├── src/keychain.rs         # Keychain + file secret store with migration
 │   └── binaries/               # ASCIIVision sidecar (built by build-asciivision.sh)
 ├── asciivision-core/           # ASCIIVision (Rust/ratatui, 18 files, ~11.6K lines)

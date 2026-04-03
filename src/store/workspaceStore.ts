@@ -12,6 +12,10 @@ interface WorkspaceState {
   workspaceItems: ItemMap;
   workspaceSelection: SelectionMap;
   scanningWorkspaceId?: string;
+  /** Separate selection map for the Chat page — isolated from IDE workspace. */
+  chatSelection: SelectionMap;
+  /** The workspace ID currently active in the Chat sidebar (independent of IDE). */
+  chatWorkspaceId?: string;
   createWorkspaceFromFolder: () => Promise<void>;
   createWorkspaceFromFiles: () => Promise<void>;
   addFilesToWorkspace: (filePaths: string[]) => Promise<void>;
@@ -22,12 +26,19 @@ interface WorkspaceState {
   selectWorkspace: (workspaceId: string) => Promise<void>;
   scanWorkspace: (workspaceId: string) => Promise<void>;
   toggleWorkspaceItem: (itemId: string) => void;
+  /** Select a workspace for Chat context (separate from IDE). */
+  selectChatWorkspace: (workspaceId: string) => Promise<void>;
+  /** Toggle a single item in the Chat selection map. */
+  toggleChatItem: (itemId: string) => void;
+  /** Clear the Chat workspace selection. */
+  clearChatSelection: () => void;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   workspaceItems: {},
   workspaceSelection: {},
+  chatSelection: {},
 
   createWorkspaceFromFolder: async () => {
     const selection = await open({ directory: true, multiple: false });
@@ -199,4 +210,26 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         [itemId]: !state.workspaceSelection[itemId],
       },
     })),
+
+  selectChatWorkspace: async (workspaceId) => {
+    const items = await api.listWorkspaceItems(workspaceId);
+    set((state) => ({
+      chatWorkspaceId: workspaceId,
+      workspaceItems: { ...state.workspaceItems, [workspaceId]: items },
+      chatSelection: Object.fromEntries(
+        items.map((item) => [item.id, state.chatSelection[item.id] ?? true]),
+      ),
+    }));
+  },
+
+  toggleChatItem: (itemId) =>
+    set((state) => ({
+      chatSelection: {
+        ...state.chatSelection,
+        [itemId]: !state.chatSelection[itemId],
+      },
+    })),
+
+  clearChatSelection: () =>
+    set({ chatWorkspaceId: undefined, chatSelection: {} }),
 }));
